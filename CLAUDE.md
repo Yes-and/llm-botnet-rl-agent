@@ -63,6 +63,16 @@ cp .env.example .env   # then fill in DEEPINFRA_API_KEY
 - The RL environment interface follows a Gym-like `reset() / step()` contract, defined in `rl/environment.py`, even though `gymnasium` is not a hard dependency.
 - Prompt templates live in `agent/prompts/` as plain text or Jinja2 files — not hardcoded strings in Python.
 
+## Docs Maintenance
+
+This is a vibe-coded project. When making any non-trivial change, update the relevant docs:
+
+- **`CLAUDE.md`** — update if architecture, stack, or project-wide conventions change.
+- **`docs/adr/`** — add a new numbered ADR (e.g. `003-reward-shaping-approach.md`) whenever a non-obvious design decision is made or a significant tradeoff is accepted. ADRs are append-only; never edit a past one.
+- **`docs/features/`** — update the relevant feature doc when a feature is added, changed, or removed. If no doc exists for the feature yet, create one.
+
+Do not wait to be asked. Updating docs is part of completing a task.
+
 ## Secrets
 
 - API keys go in `.env` only. `.env` is gitignored.

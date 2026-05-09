@@ -1,8 +1,8 @@
 # llm-botnet-rl-agent
 
-Master's thesis project. Uses reinforcement learning to drive LLM-based agents that exploit and adapt botnet code in a simulated IoT environment. Goals: benchmark LLM coding capability, probe LLM safeguard limits, and formalize a suitable RL approach for adversarial code environments.
+Master's thesis project. Uses reinforcement learning to drive LLM-based agents that develop and adapt offensive code — including botnet infrastructure, exploitation tools, and general pentesting capabilities — in a controlled simulation environment. Goals: benchmark LLM coding capability in adversarial contexts, probe LLM safeguard limits, and formalize a suitable RL approach for this problem class.
 
-**This is security research in a controlled, isolated environment. No code or infrastructure here is intended for use outside the lab.**
+**Security research in a controlled, isolated environment only.**
 
 ---
 
@@ -10,15 +10,19 @@ Master's thesis project. Uses reinforcement learning to drive LLM-based agents t
 
 ```
 llm-botnet-rl-agent/
-├── agent/              # LLM interface: DeepInfra API calls, prompt templates, action parsing
+├── agent/              # LLM interface: API calls, prompt templates, action parsing
 ├── rl/                 # Custom RL: environment interface, reward functions, policy, training loop
-├── lab/                # Docker Compose topologies + custom Dockerfiles for the IoT simulation
-│   ├── compose/        # One Compose file per scenario/experiment
-│   └── images/         # Custom Dockerfiles for simulated IoT devices and C2
+├── sandbox/            # Docker Compose topologies + Dockerfiles for the simulated environment
+│   ├── compose/        # One Compose file per scenario
+│   └── images/         # Custom Dockerfiles for simulated devices and services
 ├── experiments/        # Experiment configs (YAML) and results
-│   ├── configs/        # Versioned YAML files — one per experiment run
-│   └── results/        # Gitignored — raw logs, metrics, checkpoints
-├── scripts/            # Setup, teardown, and utility scripts
+│   ├── configs/        # Versioned YAML files — one per run
+│   └── results/        # Gitignored — logs, metrics, checkpoints
+├── scripts/            # All scripts: RL entry points and infra utilities
+│   │                   # Naming: train.py, evaluate.py for RL; sandbox_setup.sh, sandbox_teardown.sh for infra
+├── docs/
+│   ├── adr/            # Architecture Decision Records
+│   └── features/       # Feature docs and implementation status
 └── tests/
 ```
 
@@ -29,39 +33,31 @@ llm-botnet-rl-agent/
 | Python | 3.11 (via pyenv) | Pin in `.python-version` |
 | LLM API | DeepInfra (OpenAI-compatible) | Use the `openai` SDK with a custom `base_url` |
 | RL | Custom (PyTorch) | No SB3/RLlib dependency |
-| Lab environment | Docker + Docker Compose | One Compose file per scenario |
+| Sandbox environment | Docker + Docker Compose | One Compose file per scenario |
 | Experiment config | YAML | One file per run, committed to `experiments/configs/` |
 | Package management | `pyproject.toml` + `pip` | Use dependency groups: `dev`, `analysis` |
 
-## Dev Setup
+## Navigating This Repo
 
-```bash
-pyenv install 3.11
-pyenv local 3.11
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env   # then fill in DEEPINFRA_API_KEY
-```
+This repository will grow large over time. Before opening any file, orient using `CLAUDE.md`, `docs/`, and directory/file names. Only read a file's implementation when the task genuinely requires it. File and directory names should be descriptive enough to understand purpose without opening them.
 
-## Lab Environment Rules
+## Sandbox Rules
 
-- **All Docker networks must use `internal: true`.** No container in the IoT lab should have external internet access. This is non-negotiable for safety and reproducibility.
-- Each scenario lives in its own Compose file under `lab/compose/`. Never share networks across scenario files.
-- Tear down lab environments explicitly after each experiment run (`docker compose down -v`).
-- Never run lab containers with `--privileged` unless a specific kernel-level test requires it, and document why.
+- All Docker networks must use `internal: true` — no container should have external internet access.
+- Keep scenarios independent. Compose files under `sandbox/compose/` must not share networks or volumes.
+- Always tear down after a run. Never leave containers or volumes lingering between experiments.
+- Avoid elevated container privileges. If `--privileged` is ever needed, document the reason explicitly.
 
 ## Experiment Conventions
 
-- Every run gets a YAML config in `experiments/configs/` before it executes. The config must include: scenario name, model ID, RL hyperparameters, random seed, and date.
-- Results (logs, reward curves, checkpoints) go in `experiments/results/<run-id>/`. This directory is gitignored.
-- Use deterministic seeds everywhere. Set seeds in the config, not hardcoded in source.
+- Every run must be fully reproducible: commit the config before running, set all seeds in the config (not in code), and record the model ID and environment state.
+- Results are gitignored; configs are not. If a run isn't configured, it didn't happen.
 
 ## Key Design Decisions
 
-- `agent/` and `rl/` are intentionally decoupled. The LLM call logic should not depend on the RL training loop and vice versa. This allows swapping RL algorithms and running ablations without restructuring.
-- The RL environment interface follows a Gym-like `reset() / step()` contract, defined in `rl/environment.py`, even though `gymnasium` is not a hard dependency.
-- Prompt templates live in `agent/prompts/` as plain text or Jinja2 files — not hardcoded strings in Python.
+- `agent/` and `rl/` are intentionally decoupled. LLM call logic must not depend on the RL training loop and vice versa.
+- The RL environment interface follows a Gym-like `reset() / step()` contract.
+- Prompt templates are files in `agent/prompts/`, not hardcoded strings.
 
 ## Docs Maintenance
 

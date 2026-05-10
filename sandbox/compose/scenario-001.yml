@@ -1,0 +1,28 @@
+name: scenario-001
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s001_attacker
+    networks:
+      - s001_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    stdin_open: true
+    tty: true
+
+  target:
+    build: ../images/target
+    container_name: s001_target
+    hostname: target
+    networks:
+      - s001_net
+
+networks:
+  s001_net:
+    driver: bridge
+    internal: true

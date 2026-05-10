@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     hydra \
     netcat-openbsd \
     curl \
+    openssh-client \
     sshpass \
     python3 \
     && rm -rf /var/lib/apt/lists/*

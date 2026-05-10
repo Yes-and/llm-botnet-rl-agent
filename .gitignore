@@ -11,7 +11,8 @@ venv/
 .env
 
 # Experiment results
-experiments/results/
+experiments/results/*
+!experiments/results/.gitkeep
 
 # Jupyter
 .ipynb_checkpoints/

@@ -30,11 +30,11 @@ llm-botnet-rl-agent/
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Python | 3.11 (via pyenv) | Pin in `.python-version` |
+| Python | 3.11 (via pyenv) | |
 | LLM API | DeepInfra (OpenAI-compatible) | Use the `openai` SDK with a custom `base_url` |
-| RL | Custom (PyTorch) | No SB3/RLlib dependency |
-| Sandbox environment | Docker + Docker Compose | One Compose file per scenario |
-| Experiment config | YAML | One file per run, committed to `experiments/configs/` |
+| RL | Custom (PyTorch) | |
+| Sandbox environment | Docker + Docker Compose | |
+| Experiment config | YAML | |
 | Package management | `pyproject.toml` + `pip` | Use dependency groups: `dev`, `analysis` |
 
 ## Navigating This Repo
@@ -45,7 +45,6 @@ This repository will grow large over time. Before opening any file, orient using
 
 - All Docker networks must use `internal: true` — no container should have external internet access.
 - Keep scenarios independent. Compose files under `sandbox/compose/` must not share networks or volumes.
-- Always tear down after a run. Never leave containers or volumes lingering between experiments.
 - Avoid elevated container privileges. If `--privileged` is ever needed, document the reason explicitly.
 
 ## Experiment Conventions
@@ -57,7 +56,6 @@ This repository will grow large over time. Before opening any file, orient using
 
 - `agent/` and `rl/` are intentionally decoupled. LLM call logic must not depend on the RL training loop and vice versa.
 - The RL environment interface follows a Gym-like `reset() / step()` contract.
-- Prompt templates are files in `agent/prompts/`, not hardcoded strings.
 
 ## Docs Maintenance
 

@@ -12,6 +12,8 @@ services:
       - NET_RAW
     security_opt:
       - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
     stdin_open: true
     tty: true
 

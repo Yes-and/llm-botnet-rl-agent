@@ -35,7 +35,7 @@ class LLMClient:
             model=self.model,
             messages=messages,
             tools=TOOLS,
-            tool_choice="required",
+            tool_choice="required",  # always force a tool call; never allow a plain-text response
         )
         message = response.choices[0].message
         tool_call = message.tool_calls[0]
@@ -43,5 +43,5 @@ class LLMClient:
         return CommandRequest(
             command=args["command"],
             tool_call_id=tool_call.id,
-            assistant_message=message.model_dump(),
+            assistant_message=message.model_dump(),  # stored so the loop can append it to message history
         )

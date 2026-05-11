@@ -89,16 +89,23 @@ class Executor:
 
         try:
             proc = subprocess.run(
-                ["docker", "exec", self.container_name, "/bin/bash", "-c", command],
+                [
+                    "docker", "exec", self.container_name,
+                    "timeout", str(self.timeout),
+                    "/bin/bash", "-c", command,
+                ],
                 capture_output=True,
                 text=True,
-                timeout=self.timeout,
+                timeout=self.timeout + 10,  # grace period; in-container timeout fires first
             )
             output = proc.stdout + proc.stderr
             exit_code = proc.returncode
         except subprocess.TimeoutExpired:
-            output = f"[TIMEOUT] Command exceeded {self.timeout}s and was killed."
+            output = f"[TIMEOUT] docker exec hung after {self.timeout + 10}s."
             exit_code = -1
+
+        if exit_code == 124:
+            output += f"\n[TIMEOUT] Command exceeded {self.timeout}s and was killed."
 
         output = _ANSI_ESCAPE.sub("", output)
 

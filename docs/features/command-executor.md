@@ -20,7 +20,7 @@ The command executor sits between the LLM and the Docker container. It receives 
 
 | Mitigation | Detail |
 |---|---|
-| **Per-command timeout** | Commands are killed after a configurable timeout (default: 60s). Prevents runaway scans, hung sessions, and infinite loops from blocking an episode. |
+| **Per-command timeout** | The command is wrapped as `timeout <N> /bin/bash -c <cmd>` inside the container, so the process is killed at the container level after the configured limit (default: 60s). Exit code 124 signals a timeout. A Python-level grace period (`timeout + 10s`) catches the edge case where `docker exec` itself hangs. |
 | **Container memory limit** | Set in the Compose file. Prevents host resource exhaustion from memory-hungry commands. |
 | **Container CPU limit** | Set in the Compose file. Prevents aggressive parallel tools (e.g. hydra with many threads) from monopolising the host. |
 | Already in place: **no external network egress** | `internal: true` on the Docker network. Commands attempting to reach external hosts fail at the network layer. |
@@ -49,7 +49,19 @@ The command executor sits between the LLM and the Docker container. It receives 
 | **Maximum steps per episode** | Hard step limit enforced by the agent loop. Configurable per experiment in the YAML config. |
 | **Command audit log** | Every command is logged with a timestamp before execution. Exit code and truncated output are logged after. Full trace of agent behaviour for research analysis. |
 
+## Known Limitations
+
+- **`python3` bypasses the blocklist**: Python file operations (`os.remove`, `shutil.rmtree`, etc.) are not covered by the dangerous pattern list. The container sandbox (`cap_drop`, resource limits) is the actual safeguard against container damage from these paths.
+- **Pipe chains to shell**: A command like `nmap ... | bash` passes all checks. The pipe sends nmap output to bash inside the container; in practice nmap output is not valid bash, but the structural bypass exists.
+
+Both are accepted. The executor blocks obvious shell-level destructive commands; the container isolation layer handles the rest.
+
+## Testing
+
+`tests/test_executor.py` covers the validation layer: allowlist rejections, blocklist pattern matches, dry-run, truncation, ANSI stripping, timeout annotation (exit code 124), and that `subprocess.run` is called with a list (not `shell=True`). All tests are fast and offline — `subprocess.run` is mocked. The `docker exec` call itself is not tested in isolation; correct end-to-end behaviour is verified during sandbox integration runs.
+
 ## Files
 
 - `agent/executor.py` — executor implementation
+- `tests/test_executor.py` — unit tests for the validation layer
 - `sandbox/compose/scenario-001.yml` — resource limits (memory, CPU)

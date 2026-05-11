@@ -15,7 +15,7 @@ _DANGEROUS_PATTERNS = [
     re.compile(r"\brm\b"),
     re.compile(r"\bdd\b"),
     re.compile(r"\bmkfs\b"),
-    re.compile(r":\(\)\s*\{"),   # fork bomb
+    re.compile(r":\(\)\s*\{"),   # fork bomb: matches :(){ ... } shell function definition
     re.compile(r">\s*/dev/"),    # write to /dev/
 ]
 
@@ -104,7 +104,7 @@ class Executor:
             output = f"[TIMEOUT] docker exec hung after {self.timeout + 10}s."
             exit_code = -1
 
-        if exit_code == 124:
+        if exit_code == 124:  # exit code reserved by the timeout(1) command when it kills the process
             output += f"\n[TIMEOUT] Command exceeded {self.timeout}s and was killed."
 
         output = _ANSI_ESCAPE.sub("", output)

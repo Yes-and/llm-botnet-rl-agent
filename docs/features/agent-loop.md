@@ -47,7 +47,12 @@ All parameters live in `EpisodeConfig` and map directly to experiment YAML confi
 - The loop has no win condition — it always runs to `max_steps`. Win/loss detection belongs to the RL reward layer.
 - The attacker container must be running before `run_episode` is called. Container lifecycle is a sandbox concern.
 
+## Testing
+
+`tests/test_loop.py` covers the loop logic offline — both `LLMClient` and `Executor` are mocked. Tests verify: correct step count, step record structure, message history growth (2 messages per step), tool call ID threading, initial message format, and config passthrough to constructors.
+
 ## Files
 
 - `agent/loop.py` — implementation
 - `scripts/run_episode.py` — runner script for scenario-001
+- `tests/test_loop.py` — unit tests for the loop logic

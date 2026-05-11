@@ -50,3 +50,4 @@ All parameters live in `EpisodeConfig` and map directly to experiment YAML confi
 ## Files
 
 - `agent/loop.py` — implementation
+- `scripts/run_episode.py` — runner script for scenario-001

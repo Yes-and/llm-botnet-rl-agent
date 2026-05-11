@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
-from agent.executor import CommandResult, Executor
-from agent.llm_client import CommandRequest, LLMClient
+from agent.executor import CommandResult, Executor, format_tool_result
+from agent.llm_client import CommandRequest, LLMClient, build_initial_messages
 
 
 @dataclass
@@ -29,4 +29,28 @@ class EpisodeResult:
 
 
 def run_episode(config: EpisodeConfig) -> EpisodeResult:
-    raise NotImplementedError
+    client = LLMClient(model=config.model)
+    executor = Executor(
+        config.container_name,
+        dry_run=config.dry_run,
+        timeout=config.timeout,
+        max_output_chars=config.max_output_chars,
+    )
+
+    messages = build_initial_messages(config.task)
+    episode = EpisodeResult(task=config.task)
+
+    for step in range(config.max_steps):
+        request = client.complete(messages)
+        messages.append(request.assistant_message)
+
+        result = executor.execute(request.command)
+        messages.append({
+            "role": "tool",
+            "tool_call_id": request.tool_call_id,
+            "content": format_tool_result(result),
+        })
+
+        episode.steps.append(StepRecord(step=step, request=request, result=result))
+
+    return episode

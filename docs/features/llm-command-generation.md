@@ -8,7 +8,9 @@ The agent uses an LLM via the DeepInfra API (OpenAI-compatible) to generate shel
 
 ## Implementation
 
-`scripts/agent_demo.py` — standalone demo script covering the full generation flow without execution. Prints the prompt, generated command, and inference time.
+- `agent/llm_client.py` — `LLMClient` class and `CommandRequest` dataclass. `LLMClient.complete(messages)` calls the API and returns a `CommandRequest(command, tool_call_id, assistant_message)`.
+- `agent/tools.py` — `SYSTEM_PROMPT` (including verbosity instructions per ADR 004) and `TOOLS` schema.
+- `scripts/agent_demo.py` — standalone demo script covering the full generation flow without execution. Prints the prompt, generated command, and inference time.
 
 ## Model
 

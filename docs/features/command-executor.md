@@ -1,6 +1,6 @@
 # Command Executor
 
-**Status:** Planned
+**Status:** Implemented
 
 ## Overview
 

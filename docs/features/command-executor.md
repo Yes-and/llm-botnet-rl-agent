@@ -21,8 +21,8 @@ The command executor sits between the LLM and the Docker container. It receives 
 | Mitigation | Detail |
 |---|---|
 | **Per-command timeout** | The command is wrapped as `timeout <N> /bin/bash -c <cmd>` inside the container, so the process is killed at the container level after the configured limit (default: 60s). Exit code 124 signals a timeout. A Python-level grace period (`timeout + 10s`) catches the edge case where `docker exec` itself hangs. |
-| **Container memory limit** | Set in the Compose file. Prevents host resource exhaustion from memory-hungry commands. |
-| **Container CPU limit** | Set in the Compose file. Prevents aggressive parallel tools (e.g. hydra with many threads) from monopolising the host. |
+| **Container memory limit** | Not yet configured. Intended mitigation — to be added to the Compose file before RL training runs. |
+| **Container CPU limit** | Not yet configured. Intended mitigation — to be added to the Compose file before RL training runs. |
 | Already in place: **no external network egress** | `internal: true` on the Docker network. Commands attempting to reach external hosts fail at the network layer. |
 | Already in place: **capability restrictions** | `cap_drop: ALL`, `cap_add: NET_RAW` on the attacker container. No privilege escalation possible. |
 

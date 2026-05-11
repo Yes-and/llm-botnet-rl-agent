@@ -33,4 +33,7 @@ Task: *"Scan the host 'target' for open ports and identify running services."*
 ## Known Limitations
 
 - Inference latency (~15s) will be a bottleneck at RL training scale. See ADR 003 for mitigation options.
-- Single-step only — no execution or feedback loop yet.
+
+## Full Multi-Turn Loop
+
+`agent/loop.py` implements the full episode loop — LLM generates a command, executor runs it, output is fed back as a tool result, repeat. See [agent-loop.md](agent-loop.md).

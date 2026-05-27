@@ -46,6 +46,7 @@ All parameters live in `EpisodeConfig` and map directly to experiment YAML confi
 
 - The loop has no win condition — it always runs to `max_steps`. Win/loss detection belongs to the RL reward layer.
 - The attacker container must be running before `run_episode` is called. Container lifecycle is a sandbox concern.
+- If the model returns a plain-text response instead of a tool call (observed when the model considers the task complete), `LLMClient.complete` raises `ValueError`. The loop catches this and exits gracefully, returning the episode result collected so far.
 
 ## Testing
 

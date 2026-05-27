@@ -12,8 +12,8 @@ The command executor sits between the LLM and the Docker container. It receives 
 
 | Mitigation | Detail |
 |---|---|
-| **Binary allowlist** | Only commands starting with an allowed binary are executed. Allowed set: `nmap`, `hydra`, `netcat`, `curl`, `ssh`, `sshpass`, `python3`. Anything else is rejected; the rejection reason is returned to the LLM as the tool result so it can adjust. |
-| **Dangerous pattern blocklist** | Secondary check for patterns that should never appear regardless of binary: `rm`, `dd`, `mkfs`, fork bomb syntax (`:(){ :|:& };:`), writes to `/dev/`. |
+| **Binary allowlist** | Only commands starting with an allowed binary are executed. Allowed set: `nmap`, `hydra`, `netcat`, `nc`, `curl`, `ssh`, `sshpass`, `python3`, `ping`, `ls`, `cat`, `find`, `grep`, `echo`, `which`. Anything else is rejected; the rejection reason is returned to the LLM as the tool result so it can adjust. |
+| **Dangerous pattern blocklist** | Secondary check for patterns that should never appear regardless of binary: `rm`, `dd`, `mkfs`, fork bomb syntax (`:(){ :|:& };:`), writes to `/dev/`. Note: this pattern also blocks `2>/dev/null` (a false positive). Left intentionally — suppressing stderr is not needed and the safer behaviour is to keep the block. |
 | **Dry-run mode** | Commands are printed but not executed. Permanent mode flag, not a temporary debug feature. |
 
 ### Execution

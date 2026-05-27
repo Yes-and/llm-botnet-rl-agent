@@ -18,7 +18,16 @@ The agent uses an LLM via the DeepInfra API (OpenAI-compatible) to generate shel
 
 ## Tool Schema
 
-Single tool: `execute_command(command: str)`. The model is forced to call it via `tool_choice="required"`.
+Single tool: `execute_command(command: str)`. The model is forced to call it via `tool_choice="required"`. Some models ignore this when they consider the task complete and return a plain-text summary instead — the loop handles this gracefully by catching the resulting `ValueError` and ending the episode.
+
+## System Prompt Guidelines
+
+The system prompt instructs the model to:
+- Use only the listed allowed binaries
+- Focus actions on the target machine, not the attacker's own environment
+- Issue one simple command per step — no `&&`, `||`, or pipes
+- Avoid redirecting output to `/dev/null`
+- Use minimum verbosity (no `-v`/`-vv` on nmap, no `-V` on hydra)
 
 ## Verified Results (2026-05-11)
 

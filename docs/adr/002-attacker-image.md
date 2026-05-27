@@ -4,7 +4,7 @@
 
 Use a custom Debian-based image for the attacker node rather than the official Kali Linux Docker image.
 
-Included tools: `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `iputils-ping`.
+Included tools: `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `python3-pymongo`, `iputils-ping`, `telnet`, `ftp`, `redis-tools`.
 
 ## Rationale
 

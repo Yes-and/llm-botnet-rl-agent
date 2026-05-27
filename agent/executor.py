@@ -10,6 +10,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mGKH]")
 ALLOWED_BINARIES = frozenset({
     "nmap", "hydra", "netcat", "nc", "curl", "ssh", "sshpass", "python3",
     "ping", "ls", "cat", "find", "grep", "echo", "which",
+    "telnet", "ftp", "redis-cli",
 })
 
 _DANGEROUS_PATTERNS = [

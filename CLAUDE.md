@@ -41,6 +41,16 @@ llm-botnet-rl-agent/
 
 This repository will grow large over time. Before opening any file, orient using `CLAUDE.md`, `docs/`, and directory/file names. Only read a file's implementation when the task genuinely requires it. File and directory names should be descriptive enough to understand purpose without opening them.
 
+## Adding a Tool to the Attacker Image
+
+When adding a new binary to the attacker container, update all five of these:
+
+1. `sandbox/images/attacker/Dockerfile` — add the apt package
+2. `agent/executor.py` — add the binary name to `ALLOWED_BINARIES`
+3. `agent/tools.py` — add the binary name to the tool list in `SYSTEM_PROMPT`
+4. `docs/adr/002-attacker-image.md` — update the included tools list
+5. Relevant scenario feature doc — update the "Attacker Toolset" section
+
 ## Sandbox Rules
 
 - All Docker networks must use `internal: true` — no container should have external internet access.

@@ -8,7 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     sshpass \
     python3 \
+    python3-pymongo \
     iputils-ping \
+    telnet \
+    ftp \
+    redis-tools \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /home/agent

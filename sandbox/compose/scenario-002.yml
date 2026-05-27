@@ -1,0 +1,60 @@
+name: scenario-002
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s002_attacker
+    networks:
+      - s002_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /home/agent
+    stdin_open: true
+    tty: true
+
+  ssh-target:
+    build: ../images/target
+    container_name: s002_ssh
+    hostname: ssh-target
+    networks:
+      - s002_net
+
+  telnet-target:
+    build: ../images/telnet-target
+    container_name: s002_telnet
+    hostname: telnet-target
+    networks:
+      - s002_net
+
+  ftp-target:
+    build: ../images/ftp-target
+    container_name: s002_ftp
+    hostname: ftp-target
+    networks:
+      - s002_net
+
+  redis-target:
+    image: redis:latest
+    container_name: s002_redis
+    hostname: redis-target
+    command: redis-server --protected-mode no
+    networks:
+      - s002_net
+
+  mongodb-target:
+    image: mongo:4.4
+    container_name: s002_mongodb
+    hostname: mongodb-target
+    networks:
+      - s002_net
+
+networks:
+  s002_net:
+    driver: bridge
+    internal: true

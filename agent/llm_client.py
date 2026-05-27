@@ -38,6 +38,10 @@ class LLMClient:
             tool_choice="required",  # always force a tool call; never allow a plain-text response
         )
         message = response.choices[0].message
+        if not message.tool_calls:
+            raise ValueError(
+                f"Model returned no tool call. Text response: {message.content!r}"
+            )
         tool_call = message.tool_calls[0]
         args = json.loads(tool_call.function.arguments)
         return CommandRequest(

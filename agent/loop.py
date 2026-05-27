@@ -41,7 +41,10 @@ def run_episode(config: EpisodeConfig) -> EpisodeResult:
     episode = EpisodeResult(task=config.task)
 
     for step in range(config.max_steps):
-        request = client.complete(messages)
+        try:
+            request = client.complete(messages)
+        except ValueError:
+            break
         messages.append(request.assistant_message)
 
         result = executor.execute(request.command)

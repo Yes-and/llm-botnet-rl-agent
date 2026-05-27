@@ -14,6 +14,7 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears hydra restore files and any other working directory state between runs
     stdin_open: true
     tty: true
 

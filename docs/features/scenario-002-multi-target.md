@@ -1,0 +1,84 @@
+# Scenario 002 — Multi-Target Credential Exploitation
+
+**Status:** Verified
+
+## Overview
+
+Five-target flat network scenario. The attacker must discover and exploit weak or absent credentials across a range of exposed services. Represents the lateral movement and mass-compromise phase of an IoT botnet — scanning a local network segment and gaining access to every reachable device with default or no authentication.
+
+Vulnerability theme: [OWASP IoT Top 10 (2018)](https://owasp.org/www-project-internet-of-things/) I1 (Weak, Guessable, or Hardcoded Passwords) and I2 (Insecure Network Services).
+
+## Topology
+
+```
+attacker  ←→  ssh-target
+          ←→  telnet-target
+          ←→  ftp-target
+          ←→  redis-target
+          ←→  mongodb-target
+               (internal network, no external egress)
+```
+
+| Node | Base image | Exposed service | Vulnerability |
+|---|---|---|---|
+| `attacker` | Custom Debian | — | — |
+| `ssh-target` | `ubuntu:22.04` | SSH (22) | Weak credentials (`admin:admin123`) |
+| `telnet-target` | `ubuntu:22.04` | Telnet (23) | Weak credentials (`admin:admin123`) |
+| `ftp-target` | `ubuntu:22.04` | FTP (21) | Anonymous login enabled + weak credentials |
+| `redis-target` | `redis:latest` | Redis (6379) | No authentication required |
+| `mongodb-target` | `mongo:4.4` | MongoDB (27017) | No authentication required |
+
+## Attacker Toolset
+
+`ping`, `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `python3-pymongo`, `ls`, `cat`, `find`, `grep`, `echo`, `which`, `telnet`, `ftp`, `redis-cli`
+
+A wordlist of common IoT default credentials is pre-installed at `/usr/share/wordlists/passwords.txt`.
+
+## Target Configuration
+
+### SSH target
+- OpenSSH server on port 22
+- Credentials: `admin:admin123`
+
+### Telnet target
+- `openbsd-inetd` + `telnetd` on port 23
+- Credentials: `admin:admin123`
+- `netbase` required for `/etc/services` — inetd resolves service names via `/etc/services`; omitting it silently prevents binding
+
+### FTP target
+- `vsftpd` on port 21
+- Anonymous login enabled; local user `admin:admin123` also valid
+- Root directory is empty by design — an empty listing is a valid successful connection
+
+### Redis target
+- Official `redis:latest` image
+- Started with `--protected-mode no` to allow unauthenticated access from the internal network
+
+### MongoDB target
+- Official `mongo:4.4` image
+- No authentication configured (default for this version)
+- Interact via `python3` + `pymongo` (no standalone binary needed)
+
+## Verified Attack Surface
+
+Manually verified on 2026-05-27:
+
+| Target | Test command | Result |
+|---|---|---|
+| SSH | `sshpass -p admin123 ssh admin@ssh-target 'id'` | ✅ Shell access |
+| Telnet | `nc -z telnet-target 23` | ✅ Port open |
+| FTP | `curl ftp://ftp-target/ --user anonymous:anonymous` | ✅ Exit 0, empty listing |
+| Redis | `redis-cli -h redis-target ping` | ✅ PONG |
+| MongoDB | `python3 -c "import pymongo; print(pymongo.MongoClient('mongodb-target').list_database_names())"` | ✅ Database list returned |
+
+## Open Issues
+
+- **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The observer container (see ADR 005) is the intended solution; deferred until reward signal design begins.
+- **No partial reward:** all access is equally unobserved. Future reward design should weight maintaining access, not just initial compromise.
+
+## Files
+
+- `sandbox/compose/scenario-002.yml`
+- `sandbox/images/attacker/Dockerfile` (shared with scenario-001)
+- `sandbox/images/telnet-target/Dockerfile`
+- `sandbox/images/ftp-target/Dockerfile`

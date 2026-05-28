@@ -9,7 +9,7 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mGKH]")
 
 ALLOWED_BINARIES = frozenset({
     "nmap", "hydra", "netcat", "nc", "curl", "ssh", "sshpass", "python3",
-    "ping", "ls", "cat", "find", "grep", "echo", "which",
+    "ping", "ip", "ls", "cat", "find", "grep", "echo", "which",
     "telnet", "ftp", "redis-cli",
 })
 
@@ -98,6 +98,8 @@ class Executor:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.timeout + 10,  # grace period; in-container timeout fires first
             )
             output = proc.stdout + proc.stderr

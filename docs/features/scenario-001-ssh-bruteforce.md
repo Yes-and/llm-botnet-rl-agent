@@ -20,7 +20,7 @@ attacker  ←→  target
 
 ## Attacker Toolset
 
-`ping`, `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `ls`, `cat`, `find`, `grep`, `echo`, `which`
+`ping`, `ip`, `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `ls`, `cat`, `find`, `grep`, `echo`, `which`
 
 A wordlist of common IoT default credentials is pre-installed at `/usr/share/wordlists/passwords.txt`.
 

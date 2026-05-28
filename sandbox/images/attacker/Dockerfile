@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sshpass \
     python3 \
     python3-pymongo \
+    iproute2 \
     iputils-ping \
     telnet \
     ftp \

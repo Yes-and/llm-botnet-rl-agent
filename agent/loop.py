@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agent.executor import CommandResult, Executor, format_tool_result
@@ -28,7 +29,10 @@ class EpisodeResult:
     steps: list[StepRecord] = field(default_factory=list)
 
 
-def run_episode(config: EpisodeConfig) -> EpisodeResult:
+def run_episode(
+    config: EpisodeConfig,
+    on_step: Callable[[StepRecord], None] | None = None,
+) -> EpisodeResult:
     client = LLMClient(model=config.model)
     executor = Executor(
         config.container_name,
@@ -54,6 +58,9 @@ def run_episode(config: EpisodeConfig) -> EpisodeResult:
             "content": format_tool_result(result),
         })
 
-        episode.steps.append(StepRecord(step=step, request=request, result=result))
+        record = StepRecord(step=step, request=request, result=result)
+        episode.steps.append(record)
+        if on_step:
+            on_step(record)
 
     return episode

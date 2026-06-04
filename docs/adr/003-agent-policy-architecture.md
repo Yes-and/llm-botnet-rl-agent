@@ -56,6 +56,12 @@ Not a blocker for early experiments. Revisit when episode length and batch size 
 
 The concrete representation of state, action, and reward that this policy network operates on is specified in ADR 006.
 
-## Why Not Adopted Yet
+## Implementation Status
 
-The architecture is well-motivated but adds significant complexity before the basic agent loop is proven. Revisit once a simpler baseline (direct LLM prompting) has been benchmarked.
+The architecture is being actively implemented. Choices made so far:
+
+- **Embedding network**: MLP over the structured state matrix (`rl/state.py`). The LSTM and graph network options are deferred — they add sequence modelling complexity that is not needed until the MLP baseline is benchmarked.
+- **Policy output**: factored discrete heads (action type + host index) with action masking (`rl/actions.py`). Natural language instruction generated from the sampled action and injected per step by the environment (`rl/environment.py`).
+- **RL algorithm**: PPO (planned; not yet implemented in `rl/`).
+
+The policy network itself (`rl/policy.py`) and training loop (`scripts/train.py`) are the next implementation steps.

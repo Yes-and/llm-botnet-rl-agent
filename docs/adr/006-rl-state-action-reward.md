@@ -84,21 +84,21 @@ Masking prevents the policy from selecting actions that cannot succeed given cur
 
 Full mask conditions per action:
 
-| Action | Host scope | Mask condition |
+| Action | Host scope | Valid when |
 |---|---|---|
-| `do_nothing` | any | none |
-| `scan_network` | broadcast | none |
+| `do_nothing` | broadcast | always |
+| `scan_network` | broadcast | always |
 | `scan_ports` | per-host | `is_alive` |
 | `probe_port` | per-host | `is_alive` |
 | `brute_force_ssh` | per-host | `port_22_open` |
 | `brute_force_ftp` | per-host | `port_21_open` |
 | `brute_force_telnet` | per-host | `port_23_open` |
-| `connect_ssh` | per-host | `creds_found` + `service_ssh` |
-| `connect_ftp` | per-host | `creds_found` + `service_ftp` |
-| `connect_telnet` | per-host | `creds_found` + `service_telnet` |
-| `probe_http` | per-host | `port_80_open` or `port_443_open` |
-| `probe_redis` | per-host | relevant port open |
-| `probe_mongo` | per-host | relevant port open |
+| `connect_ssh` | per-host | `creds_found` AND `service_ssh` |
+| `connect_ftp` | per-host | `creds_found` AND `service_ftp` |
+| `connect_telnet` | per-host | `creds_found` AND `service_telnet` |
+| `probe_http` | per-host | `port_80_open` OR `port_443_open` |
+| `probe_redis` | per-host | `port_6379_open` |
+| `probe_mongo` | per-host | `port_27017_open` |
 
 ### Rejected Alternative: Autoregressive Action Selection
 

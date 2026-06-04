@@ -92,7 +92,7 @@ Assessment: all five targets compromised. The agent demonstrated recovery behavi
 
 ## Open Issues
 
-- **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The observer container (see ADR 005) is the intended solution. Reward signal design is now complete (see ADR 006) — observer implementation is the next step.
+- **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The RL environment (`rl/environment.py`) detects exploitation attacker-side via output parsing. An observer container (ADR 005) remains a fallback for cases where success is silent and undetectable from attacker output.
 - **No persistence reward:** reward design (ADR 006) deliberately uses sparse rewards — only exploitation events are rewarded, not maintaining access. Revisit if the policy fails to learn stable post-exploitation behaviour.
 
 ## Files

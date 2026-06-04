@@ -7,7 +7,7 @@ Minimal test suite targeting only the RL-critical path. No broad coverage goal.
 Tests cover:
 - **Reward function** (`tests/test_reward.py`) — silent bugs here corrupt training without obvious symptoms.
 - **Action parser** (`tests/test_action_parser.py`) — LLM output is unpredictable; parsing edge cases need explicit verification.
-- **Environment interface** (`tests/test_environment.py`) — added once the `reset()`/`step()` contract is defined.
+- **Environment interface** (`tests/test_environment.py`) — the `reset()`/`step()` contract is now defined (see ADR 006); implementation pending.
 
 All tests are fast and offline. LLM API and Docker interactions are mocked.
 

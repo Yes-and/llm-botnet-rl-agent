@@ -1,6 +1,6 @@
 # ADR 003 — Agent Policy Architecture
 
-**Status: Proposed (not yet adopted)**
+**Status: Adopted**
 
 ## Description
 
@@ -51,6 +51,10 @@ Candidate mitigations (to evaluate when designing the training loop):
 - **Local model** — eliminates network latency entirely; requires GPU and may reduce tool-use quality.
 
 Not a blocker for early experiments. Revisit when episode length and batch size are known.
+
+## State, Action, and Reward Specification
+
+The concrete representation of state, action, and reward that this policy network operates on is specified in ADR 006.
 
 ## Why Not Adopted Yet
 

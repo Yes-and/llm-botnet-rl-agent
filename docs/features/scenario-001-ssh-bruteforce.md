@@ -73,7 +73,7 @@ Assessment: win condition met at step 8. Steps 9–10 confirm the loop has no ea
 
 ## Open Issues
 
-- **No win condition detection:** the episode runs to `max_steps` even after the goal is achieved. The observer container (see ADR 005) is the intended solution.
+- **No win condition detection:** the episode runs to `max_steps` even after the goal is achieved. The observer container (see ADR 005) is the intended solution. Reward signal design is now complete (see ADR 006) — observer implementation is the next step.
 - **Interactive SSH hangs:** `sshpass ... ssh ... /bin/bash` with `-tt` hangs until the timeout fires. Non-interactive commands (`'id'`, `'hostname'`) work correctly and are sufficient for win condition verification.
 
 ## Files

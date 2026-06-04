@@ -77,6 +77,10 @@ This is a vibe-coded project. When making any non-trivial change, update the rel
 
 Do not wait to be asked. Updating docs is part of completing a task.
 
+## Working Style
+
+- Never run tests, scripts, or the sandbox on the user's behalf — they prefer to run things themselves. Write the code and let them execute it.
+
 ## Secrets
 
 - API keys go in `.env` only. `.env` is gitignored.

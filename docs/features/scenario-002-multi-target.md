@@ -92,8 +92,8 @@ Assessment: all five targets compromised. The agent demonstrated recovery behavi
 
 ## Open Issues
 
-- **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The observer container (see ADR 005) is the intended solution; deferred until reward signal design begins.
-- **No partial reward:** all access is equally unobserved. Future reward design should weight maintaining access, not just initial compromise.
+- **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The observer container (see ADR 005) is the intended solution. Reward signal design is now complete (see ADR 006) — observer implementation is the next step.
+- **No persistence reward:** reward design (ADR 006) deliberately uses sparse rewards — only exploitation events are rewarded, not maintaining access. Revisit if the policy fails to learn stable post-exploitation behaviour.
 
 ## Files
 

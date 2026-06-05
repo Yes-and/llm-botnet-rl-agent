@@ -58,6 +58,37 @@ NMAP_CASES = [
         {"172.18.0.1": {"is_alive": True}},
         id="host-alive-no-ports",
     ),
+    pytest.param(
+        # human-readable format, exit 0 — real output from run.log step 3
+        "nmap -sn 172.18.0.0/24",
+        0,
+        "Starting Nmap 7.93 ( https://nmap.org ) at 2026-06-05 11:34 UTC\n"
+        "Nmap scan report for 172.18.0.1\nHost is up (0.000050s latency).\n"
+        "MAC Address: CE:98:27:FD:93:5A (Unknown)\n"
+        "Nmap scan report for s002_mongodb.scenario-002_s002_net (172.18.0.2)\n"
+        "Host is up (0.000026s latency).\n"
+        "Nmap scan report for s002_ssh.scenario-002_s002_net (172.18.0.3)\n"
+        "Host is up (0.000023s latency).\n"
+        "Nmap done: 256 IP addresses (3 hosts up) scanned in 1.97 seconds\n",
+        {"172.18.0.1": {"is_alive": True},
+         "172.18.0.2": {"is_alive": True},
+         "172.18.0.3": {"is_alive": True}},
+        id="host-discovery-human-readable",
+    ),
+    pytest.param(
+        # human-readable format, timed out (exit 124) — partial output still parsed
+        "nmap -sn 172.18.0.0/16",
+        124,
+        "Starting Nmap 7.93 ( https://nmap.org ) at 2026-06-05 11:33 UTC\n"
+        "Nmap scan report for 172.18.0.1\nHost is up (0.0000090s latency).\n"
+        "MAC Address: CE:98:27:FD:93:5A (Unknown)\n"
+        "Nmap scan report for s002_mongodb.scenario-002_s002_net (172.18.0.2)\n"
+        "Host is up (0.000036s latency).\n"
+        "[TIMEOUT] Command exceeded 60s and was killed.\n",
+        {"172.18.0.1": {"is_alive": True},
+         "172.18.0.2": {"is_alive": True}},
+        id="host-discovery-human-readable-timeout",
+    ),
 ]
 
 

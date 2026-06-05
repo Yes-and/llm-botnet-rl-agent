@@ -48,6 +48,12 @@ _NMAP_PORTS_LINE = re.compile(
 # individual port entry within the Ports field: "22/open/tcp//ssh//version/"
 _NMAP_PORT_ENTRY = re.compile(r"(\d+)/open/\w+//(\w*)")
 
+# nmap human-readable (no -oG): "Nmap scan report for [hostname (]1.2.3.4[)]" + "Host is up"
+_NMAP_REPORT_UP = re.compile(
+    r"^Nmap scan report for (?:\S.*?\()?([\d.]+)\)?\s*\nHost is up",
+    re.MULTILINE,
+)
+
 # hydra credential found: "[22][ssh] host: 1.2.3.4   login: admin   password: pass"
 _HYDRA_CRED = re.compile(
     r"\[(\d+)\]\[(\w+)\] host:\s+([\d.]+)\s+login:\s+(\S+)\s+password:\s+(\S+)"
@@ -101,6 +107,7 @@ def _parse_nmap(output: str) -> ParseResult:
     # Parse regardless of exit code — timed-out scans still produce partial output.
     updates: dict[str, dict[str, bool]] = {}
 
+    # Greppable format (-oG -)
     for m in _NMAP_HOST_UP.finditer(output):
         ip = m.group(1)
         updates.setdefault(ip, {})["is_alive"] = True
@@ -116,6 +123,11 @@ def _parse_nmap(output: str) -> ParseResult:
                 feats[port_feat] = True
                 if svc_feat:
                     feats[svc_feat] = True
+
+    # Human-readable format (no -oG flag)
+    for m in _NMAP_REPORT_UP.finditer(output):
+        ip = m.group(1)
+        updates.setdefault(ip, {})["is_alive"] = True
 
     return ParseResult(state_updates=list(updates.items()))
 

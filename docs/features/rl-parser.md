@@ -35,10 +35,16 @@ The caller (environment) is responsible for deduplicating `ExploitEvent`s — th
 
 ## nmap
 
-Parses grepable (`-oG`) output only. Partial output from timed-out scans is still parsed — exit code is ignored. Two line types are handled:
+Handles both output formats. Partial output from timed-out scans is still parsed — exit code is ignored.
 
+**Grepable format (`-oG -`):**
 - `Host: <ip> (...) Status: Up` → sets `is_alive`
 - `Host: <ip> (...) Ports: <port>/open/tcp//<service>//...` → sets `port_*_open` and `service_*`
+
+**Human-readable format (no `-oG`):**
+- `Nmap scan report for <ip>` + `Host is up` → sets `is_alive`
+
+Port details are not extracted from human-readable output; use grepable format for port scanning steps.
 
 ## hydra
 

@@ -1,0 +1,6 @@
+container_name: s002_attacker
+max_steps: 5
+model: moonshotai/Kimi-K2.6
+timeout: 60
+max_output_chars: 4000
+seed: 42

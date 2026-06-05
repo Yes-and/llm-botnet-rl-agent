@@ -59,7 +59,7 @@ The message history persists across steps within an episode, giving the LLM cont
 | Situation | Behaviour |
 |---|---|
 | `host_idx` out of range for a non-broadcast action | Step penalty applied, step skipped (`info["skip"] = "invalid_host_idx"`) |
-| LLM produces no tool call | Step penalty applied, step skipped (`info["skip"] = "no_tool_call"`) |
+| LLM produces no tool call | Step penalty applied, step skipped (`info["skip"] = "no_tool_call"`); the dangling instruction is popped from message history to keep history well-formed |
 | Same exploit detected twice | Reward only on first detection; `shell_access` already True blocks re-reward |
 
 ## Files

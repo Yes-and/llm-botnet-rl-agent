@@ -76,7 +76,7 @@ class Environment:
         self._reward_calc.reset()
         self._messages = build_initial_messages(_INITIAL_TASK)
         self._step_count = 0
-        logger.info("Environment reset.")
+        logger.info("=== Episode reset ===")
         return self._state.to_tensor()
 
     def step(
@@ -97,6 +97,11 @@ class Environment:
             reward = self._reward_calc.step()
             self._step_count += 1
             done = self._step_count >= self.config.max_steps
+            logger.info(
+                "[Step %2d/%d] %-20s → %-16s  reward=%+.1f  skip=invalid_host_idx",
+                self._step_count, self.config.max_steps,
+                action.name, "(no host)", reward,
+            )
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
                 "skip": "invalid_host_idx",
@@ -108,10 +113,16 @@ class Environment:
         try:
             request = self._client.complete(self._messages)
         except ValueError as exc:
-            logger.warning("step=%d LLM produced no tool call: %s", self._step_count + 1, exc)
+            self._messages.pop()  # remove the dangling instruction; keeps history well-formed
+            logger.debug("LLM produced no tool call: %s", exc)
             reward = self._reward_calc.step()
             self._step_count += 1
             done = self._step_count >= self.config.max_steps
+            logger.info(
+                "[Step %2d/%d] %-20s → %-16s  reward=%+.1f  skip=no_tool_call",
+                self._step_count, self.config.max_steps,
+                action.name, ip or "broadcast", reward,
+            )
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
                 "skip": "no_tool_call",
@@ -156,15 +167,12 @@ class Environment:
             "exploit": exploit,
             "truncated": result.truncated,
         }
+        logger.debug("cmd=%r exit=%d truncated=%s", request.command, result.exit_code, result.truncated)
         logger.info(
-            "step=%d action=%s host=%s cmd=%r exit=%d reward=%.1f exploit=%s",
-            self._step_count,
-            action.name,
-            ip,
-            request.command,
-            result.exit_code,
-            reward,
-            exploit.vulnerability if exploit else None,
+            "[Step %2d/%d] %-20s → %-16s  reward=%+.1f%s",
+            self._step_count, self.config.max_steps,
+            action.name, ip or "broadcast", reward,
+            f"  exploit={exploit.vulnerability}" if exploit else "",
         )
         return self._state.to_tensor(), reward, done, info
 

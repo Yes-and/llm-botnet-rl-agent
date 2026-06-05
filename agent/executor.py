@@ -78,7 +78,7 @@ class Executor:
                     dry_run=self.dry_run,
                 )
 
-        logger.info("COMMAND: %s", command)
+        logger.debug("COMMAND: %s", command)
 
         if self.dry_run:
             return CommandResult(
@@ -119,7 +119,7 @@ class Executor:
             output = output[:half] + "\n[... output truncated ...]\n" + output[-half:]
             truncated = True
 
-        logger.info("EXIT_CODE=%d TRUNCATED=%s", exit_code, truncated)
+        logger.debug("EXIT_CODE=%d TRUNCATED=%s", exit_code, truncated)
         return CommandResult(
             command=command,
             output=output,

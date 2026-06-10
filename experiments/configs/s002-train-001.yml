@@ -1,0 +1,28 @@
+# REINFORCE training run — scenario-002 (multi-service, 5 targets)
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s002_attacker
+max_steps: 10
+model: moonshotai/Kimi-K2.6
+timeout: 60
+max_output_chars: 4000
+dry_run: false
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+
+# --- Training ---
+num_episodes: 1
+gamma: 0.99
+learning_rate: 0.001
+use_baseline: false
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

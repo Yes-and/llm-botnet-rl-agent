@@ -1,6 +1,6 @@
 # RL Policy
 
-**Status:** Planned
+**Status:** Implemented
 
 ## Overview
 
@@ -65,7 +65,8 @@ action, host_idx           = policy.predict(state_tensor, known_host_count)  # a
 
 ## Files
 
-- `rl/policy.py` — implementation (planned)
+- `rl/policy.py` — implementation
+- `tests/test_policy.py` — unit tests (shapes, masking, log-prob, determinism)
 - `docs/adr/007-rl-algorithm-and-policy-design.md` — design decisions
 - `rl/actions.py` — action enum and `is_valid`
 - `rl/state.py` — state tensor structure

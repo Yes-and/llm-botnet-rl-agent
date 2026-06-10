@@ -1,0 +1,198 @@
+"""
+REINFORCE training loop.
+
+Collects full episodes, computes discounted returns, and updates the policy
+with a Monte Carlo policy gradient step. Checkpoints are saved to
+experiments/results/<run_id>/ every save_every episodes.
+
+Usage:
+    python scripts/train.py experiments/configs/s002-train-001.yml
+    python scripts/train.py experiments/configs/s002-train-001.yml --log-file custom.log
+"""
+
+import argparse
+import logging
+import os
+import random
+import time
+from pathlib import Path
+
+import torch
+import yaml
+from dotenv import load_dotenv
+
+from rl.environment import Environment, EnvironmentConfig
+from rl.logging_setup import setup_logging
+from rl.policy import Policy
+
+load_dotenv()
+
+logger = logging.getLogger("rl.train")
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser(description="REINFORCE training loop.")
+parser.add_argument("config", type=Path, help="Path to YAML training config")
+parser.add_argument("--log-file", default=None, help="Log file path (default: results_dir/<run_id>/train.log)")
+args = parser.parse_args()
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+with open(args.config) as f:
+    raw = yaml.safe_load(f)
+
+# ── Preflight checks ─────────────────────────────────────────────────────────
+
+if not os.environ.get("DEEPINFRA_API_KEY"):
+    raise RuntimeError("DEEPINFRA_API_KEY is not set. Add it to .env before training.")
+
+# ── Seeds ─────────────────────────────────────────────────────────────────────
+
+seed_python = raw.get("seed_python", 42)
+seed_torch = raw.get("seed_torch", 42)
+random.seed(seed_python)
+torch.manual_seed(seed_torch)
+
+# ── Results dir ───────────────────────────────────────────────────────────────
+
+run_id = args.config.stem
+results_dir = Path(raw.get("results_dir", "experiments/results")) / run_id
+results_dir.mkdir(parents=True, exist_ok=True)
+
+log_file = args.log_file or str(results_dir / "train.log")
+setup_logging(log_file)
+
+# ── Environment / Policy / Optimizer ─────────────────────────────────────────
+
+env_config = EnvironmentConfig(
+    container_name=raw["container_name"],
+    max_steps=raw.get("max_steps", 40),
+    dry_run=raw.get("dry_run", False),
+    timeout=raw.get("timeout", 60),
+    max_output_chars=raw.get("max_output_chars", 4000),
+    model=raw.get("model", "moonshotai/Kimi-K2.6"),
+)
+env = Environment(env_config)
+
+policy = Policy(
+    hidden_dim=raw.get("hidden_dim", 128),
+    num_layers=raw.get("num_layers", 2),
+)
+optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
+
+# ── Hyperparameters ───────────────────────────────────────────────────────────
+
+num_episodes = raw["num_episodes"]
+gamma = raw.get("gamma", 0.99)
+use_baseline = raw.get("use_baseline", True)
+save_every = raw.get("save_every", 10)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _compute_returns(rewards: list[float], gamma: float) -> torch.Tensor:
+    G = 0.0
+    returns: list[float] = []
+    for r in reversed(rewards):
+        G = r + gamma * G
+        returns.append(G)
+    returns.reverse()
+    return torch.tensor(returns, dtype=torch.float32)
+
+
+def _save_checkpoint(episode: int) -> None:
+    path = results_dir / f"checkpoint_ep{episode:04d}.pt"
+    torch.save({
+        "episode": episode,
+        "policy_state_dict": policy.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "config": raw,
+    }, path)
+    logger.info("Checkpoint saved: %s", path)
+
+
+# ── Startup summary ───────────────────────────────────────────────────────────
+
+print(f"Config:      {args.config}")
+print(f"Run ID:      {run_id}")
+print(f"Container:   {env_config.container_name}")
+print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
+print(f"Model:       {env_config.model}")
+print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
+print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}")
+print(f"Seeds:       python={seed_python}  torch={seed_torch}")
+print(f"Results:     {results_dir}")
+print(f"Log:         {log_file}")
+print()
+
+# ── Training loop ─────────────────────────────────────────────────────────────
+
+episode_rewards: list[float] = []
+run_start = time.time()
+
+for episode in range(1, num_episodes + 1):
+    ep_start = time.time()
+    state = env.reset()
+
+    log_probs: list[torch.Tensor] = []
+    rewards: list[float] = []
+    exploits: list[str] = []
+
+    done = False
+    while not done:
+        known_host_count = len(env._state.known_hosts())
+        action, host_slot, log_prob = policy.sample(state, known_host_count)
+
+        # host_slot 0 (no_host) and 1 (all_hosts) are broadcast — host_idx is ignored
+        host_idx = max(0, host_slot - 2)
+
+        state, reward, done, info = env.step(action, host_idx)
+
+        log_probs.append(log_prob)
+        rewards.append(reward)
+        if info.get("exploit"):
+            exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
+
+    # Discounted returns
+    returns = _compute_returns(rewards, gamma)
+    if use_baseline:
+        returns = returns - returns.mean()
+
+    # Policy gradient update
+    loss = -(torch.stack(log_probs) * returns).sum()
+    optimizer.zero_grad()
+    loss.backward()
+    if torch.isnan(loss):
+        raise RuntimeError(
+            f"Loss is NaN at episode {episode}. "
+            "Check for exploding gradients or degenerate log-probs."
+        )
+    optimizer.step()
+
+    total_reward = sum(rewards)
+    episode_rewards.append(total_reward)
+    ep_elapsed = time.time() - ep_start
+
+    logger.info(
+        "Episode %d/%d  reward=%+.1f  exploits=%d  loss=%.4f  elapsed=%.1fs",
+        episode, num_episodes, total_reward, len(exploits), loss.item(), ep_elapsed,
+    )
+    print(
+        f"Ep {episode:4d}/{num_episodes}  reward={total_reward:+6.1f}  "
+        f"exploits={len(exploits)}  loss={loss.item():8.4f}  ({ep_elapsed:.0f}s)"
+    )
+
+    if episode % save_every == 0 or episode == num_episodes:
+        _save_checkpoint(episode)
+
+# ── Final summary ─────────────────────────────────────────────────────────────
+
+total_elapsed = time.time() - run_start
+mean_reward = sum(episode_rewards) / len(episode_rewards)
+print()
+print("─" * 60)
+print(f"Episodes:      {num_episodes}")
+print(f"Mean reward:   {mean_reward:+.2f}")
+print(f"Best reward:   {max(episode_rewards):+.1f}")
+print(f"Total time:    {total_elapsed:.1f}s  ({total_elapsed / num_episodes:.1f}s/ep)")
+print(f"Results:       {results_dir}")
+print(f"Log:           {log_file}")

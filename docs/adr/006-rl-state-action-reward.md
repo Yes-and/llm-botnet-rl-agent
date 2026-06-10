@@ -1,6 +1,6 @@
 # ADR 006 — RL State, Action, and Reward Representation
 
-**Status: Adopted**
+**Status: Partially superseded by ADR 007**
 
 ## Context
 
@@ -135,3 +135,14 @@ Intermediate rewards for first-time discoveries (new host, new open port, valid 
 ## Relationship to ADR 003
 
 ADR 003 describes *how* the policy network is structured and trained (embedding network, PPO, inference latency concerns). This ADR describes *what* the network operates on. Both are required for a complete specification of the RL formulation.
+
+---
+
+## Superseded sections (see ADR 007)
+
+| Section | What changed |
+|---|---|
+| Action → Factored Heads | Action-first → host-first; host head gains `no_host` and `all_hosts` slots |
+| Action → Action Masking | Feature-based hard masking → minimal hard + soft masking for invalid combos only |
+
+State representation, reward structure, and success detection remain valid.

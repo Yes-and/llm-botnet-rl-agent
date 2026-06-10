@@ -1,6 +1,6 @@
 # ADR 003 — Agent Policy Architecture
 
-**Status: Adopted**
+**Status: Partially superseded by ADR 007**
 
 ## Description
 
@@ -65,3 +65,14 @@ The architecture is being actively implemented. Choices made so far:
 - **RL algorithm**: PPO (planned; not yet implemented in `rl/`).
 
 The policy network itself (`rl/policy.py`) and training loop (`scripts/train.py`) are the next implementation steps.
+
+---
+
+## Superseded sections (see ADR 007)
+
+| Section | What changed |
+|---|---|
+| RL Algorithm | PPO → REINFORCE |
+| Implementation Status → policy output | action-first → host-first factored heads |
+
+Overall architecture (frozen LLM, MLP embedding, natural language instruction) remains valid.

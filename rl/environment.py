@@ -72,12 +72,27 @@ class Environment:
 
     def reset(self) -> torch.Tensor:
         """Start a new episode. Returns the initial observation (all zeros)."""
+        if not self.config.dry_run:
+            probe = self._executor.execute("echo ok")
+            if probe.exit_code != 0:
+                raise RuntimeError(
+                    f"Container '{self.config.container_name}' is not reachable "
+                    f"(exit={probe.exit_code}). Is the sandbox running?"
+                )
         self._state.reset()
         self._reward_calc.reset()
         self._messages = build_initial_messages(_INITIAL_TASK)
         self._step_count = 0
         logger.info("=== Episode reset ===")
         return self._state.to_tensor()
+
+    @staticmethod
+    def _host_label(action: Action, ip: str | None) -> str:
+        if action == Action.DO_NOTHING:
+            return "no_host"
+        if action == Action.SCAN_NETWORK:
+            return "all_hosts"
+        return ip or "unknown"
 
     def step(
         self, action: Action, host_idx: int
@@ -98,9 +113,9 @@ class Environment:
             self._step_count += 1
             done = self._step_count >= self.config.max_steps
             logger.info(
-                "[Step %2d/%d] %-20s → %-16s  reward=%+.1f  skip=invalid_host_idx",
+                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=invalid_host_idx",
                 self._step_count, self.config.max_steps,
-                action.name, "(no host)", reward,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
@@ -119,9 +134,9 @@ class Environment:
             self._step_count += 1
             done = self._step_count >= self.config.max_steps
             logger.info(
-                "[Step %2d/%d] %-20s → %-16s  reward=%+.1f  skip=no_tool_call",
+                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=no_tool_call",
                 self._step_count, self.config.max_steps,
-                action.name, ip or "broadcast", reward,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
@@ -169,9 +184,9 @@ class Environment:
         }
         logger.debug("cmd=%r exit=%d truncated=%s", request.command, result.exit_code, result.truncated)
         logger.info(
-            "[Step %2d/%d] %-20s → %-16s  reward=%+.1f%s",
+            "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f%s",
             self._step_count, self.config.max_steps,
-            action.name, ip or "broadcast", reward,
+            action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             f"  exploit={exploit.vulnerability}" if exploit else "",
         )
         return self._state.to_tensor(), reward, done, info

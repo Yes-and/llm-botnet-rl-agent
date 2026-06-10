@@ -9,7 +9,9 @@ Issue one simple command per step. Avoid chaining commands with &&, ||, or pipes
 Use the minimum verbosity needed for each task:
 - nmap: avoid -v/-vv; prefer -oG or -oX for machine-readable output where applicable.
 - hydra: avoid -V (per-attempt verbose output).
-- General: never use verbose flags unless the task explicitly requires them.\
+- General: never use verbose flags unless the task explicitly requires them.
+
+Each command has a strict time limit. Prefer targeted, fast commands over broad sweeps. If a previous attempt timed out, use a more conservative approach.\
 """
 
 TOOLS = [

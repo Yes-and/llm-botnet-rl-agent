@@ -28,6 +28,7 @@ The system prompt instructs the model to:
 - Issue one simple command per step — no `&&`, `||`, or pipes
 - Avoid redirecting output to `/dev/null`
 - Use minimum verbosity (no `-v`/`-vv` on nmap, no `-V` on hydra)
+- Prefer targeted, fast commands — each command has a strict time limit; if a previous attempt timed out, use a more conservative approach
 
 ## Verified Results (2026-05-11)
 

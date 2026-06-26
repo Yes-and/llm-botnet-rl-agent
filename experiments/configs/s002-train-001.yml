@@ -3,7 +3,7 @@
 
 # --- Environment ---
 container_name: s002_attacker
-max_steps: 10
+max_steps: 30
 model: moonshotai/Kimi-K2.6
 timeout: 60
 max_output_chars: 4000
@@ -11,18 +11,18 @@ dry_run: false
 context_window: 10
 
 # --- Seeds ---
-seed_python: 42
-seed_torch: 42
+seed_python: 0
+seed_torch: 0
 
 # --- Policy ---
 hidden_dim: 128
 num_layers: 1
 
 # --- Training ---
-num_episodes: 1
+num_episodes: 50
 gamma: 0.99
 learning_rate: 0.001
-use_baseline: false
+use_baseline: true
 
 # --- Checkpoints ---
 save_every: 10

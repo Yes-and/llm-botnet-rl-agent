@@ -11,16 +11,22 @@ Usage:
 """
 
 import argparse
+import csv
+import json
 import logging
 import os
 import random
+import subprocess
 import time
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
 import yaml
 from dotenv import load_dotenv
 
+from rl.actions import Action
 from rl.environment import Environment, EnvironmentConfig
 from rl.logging_setup import setup_logging
 from rl.policy import Policy
@@ -87,6 +93,35 @@ gamma = raw.get("gamma", 0.99)
 use_baseline = raw.get("use_baseline", True)
 save_every = raw.get("save_every", 10)
 
+# ── Tracking setup ────────────────────────────────────────────────────────────
+
+def _git_commit() -> str:
+    try:
+        hash_ = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        dirty = subprocess.check_output(["git", "status", "--porcelain"], text=True).strip()
+        return hash_ + ("-dirty" if dirty else "")
+    except Exception:
+        return "unknown"
+
+
+metadata = {
+    "run_id": run_id,
+    "git_commit": _git_commit(),
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+    "config": raw,
+}
+with open(results_dir / "run_metadata.json", "w") as f:
+    json.dump(metadata, f, indent=2)
+logger.info("Run metadata written: commit=%s", metadata["git_commit"])
+
+_ACTION_COLS = [f"act_{a.name.lower()}" for a in Action]
+_CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "elapsed_s", "entropy"] + _ACTION_COLS
+
+_rewards_csv = open(results_dir / "rewards.csv", "w", newline="")
+_csv_writer = csv.DictWriter(_rewards_csv, fieldnames=_CSV_FIELDS)
+_csv_writer.writeheader()
+_rewards_csv.flush()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _compute_returns(rewards: list[float], gamma: float) -> torch.Tensor:
@@ -136,11 +171,13 @@ for episode in range(1, num_episodes + 1):
     log_probs: list[torch.Tensor] = []
     rewards: list[float] = []
     exploits: list[str] = []
+    entropies: list[float] = []
+    action_counts: Counter = Counter()
 
     done = False
     while not done:
         known_host_count = len(env._state.known_hosts())
-        action, host_slot, log_prob = policy.sample(state, known_host_count)
+        action, host_slot, log_prob, entropy = policy.sample(state, known_host_count)
 
         # host_slot 0 (no_host) and 1 (all_hosts) are broadcast — host_idx is ignored
         host_idx = max(0, host_slot - 2)
@@ -149,6 +186,8 @@ for episode in range(1, num_episodes + 1):
 
         log_probs.append(log_prob)
         rewards.append(reward)
+        entropies.append(entropy.item())
+        action_counts[action] += 1
         if info.get("exploit"):
             exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 
@@ -171,21 +210,34 @@ for episode in range(1, num_episodes + 1):
     total_reward = sum(rewards)
     episode_rewards.append(total_reward)
     ep_elapsed = time.time() - ep_start
+    mean_entropy = sum(entropies) / len(entropies) if entropies else 0.0
 
     logger.info(
-        "Episode %d/%d  reward=%+.1f  exploits=%d  loss=%.4f  elapsed=%.1fs",
-        episode, num_episodes, total_reward, len(exploits), loss.item(), ep_elapsed,
+        "Episode %d/%d  reward=%+.1f  exploits=%d  loss=%.4f  entropy=%.3f  elapsed=%.1fs",
+        episode, num_episodes, total_reward, len(exploits), loss.item(), mean_entropy, ep_elapsed,
     )
     print(
         f"Ep {episode:4d}/{num_episodes}  reward={total_reward:+6.1f}  "
-        f"exploits={len(exploits)}  loss={loss.item():8.4f}  ({ep_elapsed:.0f}s)"
+        f"exploits={len(exploits)}  loss={loss.item():8.4f}  entropy={mean_entropy:.3f}  ({ep_elapsed:.0f}s)"
     )
+
+    _csv_writer.writerow({
+        "episode": episode,
+        "total_reward": round(total_reward, 2),
+        "loss": round(loss.item(), 6),
+        "exploit_count": len(exploits),
+        "elapsed_s": round(ep_elapsed, 1),
+        "entropy": round(mean_entropy, 4),
+        **{f"act_{a.name.lower()}": action_counts.get(a, 0) for a in Action},
+    })
+    _rewards_csv.flush()
 
     if episode % save_every == 0 or episode == num_episodes:
         _save_checkpoint(episode)
 
 # ── Final summary ─────────────────────────────────────────────────────────────
 
+_rewards_csv.close()
 total_elapsed = time.time() - run_start
 mean_reward = sum(episode_rewards) / len(episode_rewards)
 print()

@@ -72,8 +72,12 @@ class Policy(nn.Module):
 
     def sample(
         self, state: torch.Tensor, known_host_count: int
-    ) -> tuple[Action, int, torch.Tensor]:
-        """Sample (action, host_slot, log_prob) for use in the REINFORCE training loop."""
+    ) -> tuple[Action, int, torch.Tensor, torch.Tensor]:
+        """Sample (action, host_slot, log_prob, entropy) for use in the REINFORCE training loop.
+
+        Entropy is the sum of host and action head entropies — a proxy for overall policy
+        uncertainty. Collapse toward zero signals the policy has stopped exploring.
+        """
         hidden = self.trunk(state.flatten())
 
         host_logits = self._masked_host_logits(hidden, known_host_count)
@@ -85,7 +89,8 @@ class Policy(nn.Module):
         action_idx = action_dist.sample()
 
         log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action_idx)
-        return Action(action_idx.item()), host_slot.item(), log_prob
+        entropy = host_dist.entropy() + action_dist.entropy()
+        return Action(action_idx.item()), host_slot.item(), log_prob, entropy
 
     def predict(self, state: torch.Tensor, known_host_count: int) -> tuple[Action, int]:
         """Argmax selection for evaluation; no gradient computation."""

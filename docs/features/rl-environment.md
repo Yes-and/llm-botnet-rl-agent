@@ -45,14 +45,17 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
+    context_window: int = 3   # number of recent step exchanges retained in LLM history
 ```
 
 ## LLM Message History
 
-The message history persists across steps within an episode, giving the LLM context about what it has already done. It is cleared on `reset()`. Each step adds:
+The message history gives the LLM context about recent steps. It is cleared on `reset()`. Each step adds:
 - one `user` message (the instruction)
 - one `assistant` message (the tool call)
 - one `tool` message (the command output)
+
+A sliding window limits history to the last `context_window` complete exchanges. Older exchanges are dropped after each step. This prevents the LLM from accumulating enough context to start making strategic decisions that belong to the RL policy — the LLM's role is to execute individual instructions, not to plan across many steps. The system prompt and initial task message are always retained as a fixed header.
 
 ## Edge Cases
 

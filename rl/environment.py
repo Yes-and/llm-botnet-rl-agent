@@ -41,6 +41,7 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
+    context_window: int = 10
 
 
 class Environment:
@@ -82,6 +83,7 @@ class Environment:
         self._state.reset()
         self._reward_calc.reset()
         self._messages = build_initial_messages(_INITIAL_TASK)
+        self._n_header = len(self._messages)
         self._step_count = 0
         logger.info("=== Episode reset ===")
         return self._state.to_tensor()
@@ -151,6 +153,7 @@ class Environment:
             "tool_call_id": request.tool_call_id,
             "content": format_tool_result(result),
         })
+        self._prune_messages()
 
         parsed = parse_step(request.command, result.output, result.exit_code)
 
@@ -196,6 +199,13 @@ class Environment:
         return self._step_count
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _prune_messages(self) -> None:
+        """Trim message history to the last context_window complete exchanges."""
+        variable = self._messages[self._n_header:]
+        max_msgs = self.config.context_window * 3
+        if len(variable) > max_msgs:
+            self._messages = self._messages[:self._n_header] + variable[-max_msgs:]
 
     def _resolve_host(self, action: Action, host_idx: int) -> str | None:
         if action in BROADCAST_ACTIONS:

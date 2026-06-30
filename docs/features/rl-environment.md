@@ -45,7 +45,7 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
-    context_window: int = 3   # number of recent step exchanges retained in LLM history
+    context_window: int = 10  # number of recent step exchanges retained in LLM history
 ```
 
 ## LLM Message History
@@ -57,7 +57,7 @@ The message history gives the LLM context about recent steps. It is cleared on `
 
 A sliding window limits history to the last `context_window` complete exchanges. Older exchanges are dropped after each step. This prevents the LLM from accumulating enough context to start making strategic decisions that belong to the RL policy — the LLM's role is to execute individual instructions, not to plan across many steps. The system prompt and initial task message are always retained as a fixed header.
 
-## Edge Cases
+## Diagnostics
 
 Step log lines include `hosts=N` showing the number of known hosts at the time the action was selected — useful for diagnosing whether host discovery is flowing into state.
 

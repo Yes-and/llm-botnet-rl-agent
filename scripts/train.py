@@ -40,6 +40,7 @@ logger = logging.getLogger("rl.train")
 parser = argparse.ArgumentParser(description="REINFORCE training loop.")
 parser.add_argument("config", type=Path, help="Path to YAML training config")
 parser.add_argument("--log-file", default=None, help="Log file path (default: results_dir/<run_id>/train.log)")
+parser.add_argument("--resume", type=Path, default=None, help="Path to checkpoint .pt file to resume from")
 args = parser.parse_args()
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -87,6 +88,14 @@ policy = Policy(
 )
 optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
 
+resume_episode = 0
+if args.resume:
+    checkpoint = torch.load(args.resume, weights_only=True)
+    policy.load_state_dict(checkpoint["policy_state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    resume_episode = checkpoint["episode"]
+    logger.info("Resumed from checkpoint: %s (episode %d)", args.resume, resume_episode)
+
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 
 num_episodes = raw["num_episodes"]
@@ -118,9 +127,11 @@ logger.info("Run metadata written: commit=%s", metadata["git_commit"])
 _ACTION_COLS = [f"act_{a.name.lower()}" for a in Action]
 _CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "elapsed_s", "entropy"] + _ACTION_COLS
 
-_rewards_csv = open(results_dir / "rewards.csv", "w", newline="")
+_csv_mode = "a" if (args.resume and (results_dir / "rewards.csv").exists()) else "w"
+_rewards_csv = open(results_dir / "rewards.csv", _csv_mode, newline="")
 _csv_writer = csv.DictWriter(_rewards_csv, fieldnames=_CSV_FIELDS)
-_csv_writer.writeheader()
+if _csv_mode == "w":
+    _csv_writer.writeheader()
 _rewards_csv.flush()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -156,6 +167,7 @@ print(f"Model:       {env_config.model}")
 print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
 print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}")
 print(f"Seeds:       python={seed_python}  torch={seed_torch}")
+print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
 print(f"Results:     {results_dir}")
 print(f"Log:         {log_file}")
 print()
@@ -165,7 +177,7 @@ print()
 episode_rewards: list[float] = []
 run_start = time.time()
 
-for episode in range(1, num_episodes + 1):
+for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
     ep_start = time.time()
     state = env.reset()
 

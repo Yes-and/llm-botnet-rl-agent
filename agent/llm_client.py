@@ -23,8 +23,9 @@ def build_initial_messages(task: str) -> list[dict]:
 
 
 class LLMClient:
-    def __init__(self, model: str = "moonshotai/Kimi-K2.6"):
+    def __init__(self, model: str = "moonshotai/Kimi-K2.6", api_timeout: int = 60):
         self.model = model
+        self._api_timeout = api_timeout
         self._client = openai.OpenAI(
             api_key=os.environ["DEEPINFRA_API_KEY"],
             base_url="https://api.deepinfra.com/v1/openai",
@@ -36,6 +37,7 @@ class LLMClient:
             messages=messages,
             tools=TOOLS,
             tool_choice="required",  # always force a tool call; never allow a plain-text response
+            timeout=self._api_timeout,
         )
         message = response.choices[0].message
         if not message.tool_calls:
@@ -47,5 +49,19 @@ class LLMClient:
         return CommandRequest(
             command=args["command"],
             tool_call_id=tool_call.id,
-            assistant_message=message.model_dump(),  # stored so the loop can append it to message history
+            assistant_message={
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in message.tool_calls
+                ],
+            },
         )

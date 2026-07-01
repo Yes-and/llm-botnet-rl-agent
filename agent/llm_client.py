@@ -23,21 +23,24 @@ def build_initial_messages(task: str) -> list[dict]:
 
 
 class LLMClient:
-    def __init__(self, model: str = "moonshotai/Kimi-K2.6", api_timeout: int = 60):
+    def __init__(self, model: str = "moonshotai/Kimi-K2.6", api_timeout: int = 60, reasoning_effort: str | None = None):
         self.model = model
         self._api_timeout = api_timeout
+        self._reasoning_effort = reasoning_effort
         self._client = openai.OpenAI(
             api_key=os.environ["DEEPINFRA_API_KEY"],
             base_url="https://api.deepinfra.com/v1/openai",
         )
 
     def complete(self, messages: list[dict]) -> CommandRequest:
+        extra = {"reasoning_effort": self._reasoning_effort} if self._reasoning_effort is not None else {}
         response = self._client.chat.completions.create(
             model=self.model,
             messages=messages,
             tools=TOOLS,
             tool_choice="required",  # always force a tool call; never allow a plain-text response
             timeout=self._api_timeout,
+            extra_body=extra,
         )
         message = response.choices[0].message
         if not message.tool_calls:

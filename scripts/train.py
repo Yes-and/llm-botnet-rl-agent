@@ -80,6 +80,7 @@ env_config = EnvironmentConfig(
     model=raw.get("model", "moonshotai/Kimi-K2.6"),
     context_window=raw.get("context_window", 3),
     api_timeout=raw.get("api_timeout", 60),
+    reasoning_effort=raw.get("reasoning_effort", None),
 )
 env = Environment(env_config)
 

@@ -44,6 +44,7 @@ class EnvironmentConfig:
     model: str = "moonshotai/Kimi-K2.6"
     context_window: int = 10
     api_timeout: int = 60
+    reasoning_effort: str | None = None  # e.g. "none" to disable thinking on Qwen models
 
 
 class Environment:
@@ -61,7 +62,7 @@ class Environment:
         self.config = config
         self._state = EpisodeState()
         self._reward_calc = RewardCalculator()
-        self._client = LLMClient(model=config.model, api_timeout=config.api_timeout)
+        self._client = LLMClient(model=config.model, api_timeout=config.api_timeout, reasoning_effort=config.reasoning_effort)
         self._executor = Executor(
             config.container_name,
             dry_run=config.dry_run,

@@ -47,6 +47,7 @@ class EnvironmentConfig:
     model: str = "moonshotai/Kimi-K2.6"
     context_window: int = 10  # number of recent step exchanges retained in LLM history
     api_timeout: int = 60     # seconds before an LLM API call is aborted and retried
+    reasoning_effort: str | None = None  # DeepInfra reasoning_effort field; set to "none" to disable thinking on Qwen models
 ```
 
 ## LLM Message History

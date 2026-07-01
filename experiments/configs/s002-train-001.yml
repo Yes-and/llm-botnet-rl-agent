@@ -23,6 +23,7 @@ num_episodes: 50
 gamma: 0.99
 learning_rate: 0.001
 use_baseline: true
+grad_clip: 1.0
 
 # --- Checkpoints ---
 save_every: 10

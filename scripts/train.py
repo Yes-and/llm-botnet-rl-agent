@@ -102,6 +102,7 @@ num_episodes = raw["num_episodes"]
 gamma = raw.get("gamma", 0.99)
 use_baseline = raw.get("use_baseline", True)
 save_every = raw.get("save_every", 10)
+grad_clip = raw.get("grad_clip", 1.0)
 
 # ── Tracking setup ────────────────────────────────────────────────────────────
 
@@ -213,6 +214,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
     loss = -(torch.stack(log_probs) * returns).sum()
     optimizer.zero_grad()
     loss.backward()
+    torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)
     if torch.isnan(loss):
         raise RuntimeError(
             f"Loss is NaN at episode {episode}. "

@@ -15,6 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+import openai
 import torch
 
 from agent.executor import Executor, format_tool_result
@@ -130,20 +131,21 @@ class Environment:
 
         try:
             request = self._client.complete(self._messages)
-        except ValueError as exc:
+        except (ValueError, openai.APITimeoutError) as exc:
             self._messages.pop()  # remove the dangling instruction; keeps history well-formed
-            logger.debug("LLM produced no tool call: %s", exc)
+            logger.warning("LLM call failed, skipping step: %s", exc)
             reward = self._reward_calc.step()
             self._step_count += 1
             done = self._step_count >= self.config.max_steps
+            skip = "api_timeout" if isinstance(exc, openai.APITimeoutError) else "no_tool_call"
             logger.info(
-                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=no_tool_call",
+                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=%s",
                 self._step_count, self.config.max_steps,
-                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward, skip,
             )
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
-                "skip": "no_tool_call",
+                "skip": skip,
             }
 
         self._messages.append(request.assistant_message)

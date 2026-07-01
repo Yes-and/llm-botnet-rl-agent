@@ -1,29 +1,30 @@
 # REINFORCE training run — scenario-002 (multi-service, 5 targets)
+# Model: Qwen/Qwen3.5-9B
 # Commit this file before running. Results are gitignored.
 
 # --- Environment ---
 container_name: s002_attacker
-max_steps: 10
-model: moonshotai/Kimi-K2.6
+max_steps: 50
+model: Qwen/Qwen3.5-9B
 timeout: 60
 api_timeout: 60
 max_output_chars: 4000
 dry_run: false
-context_window: 10
+context_window: 5
 
 # --- Seeds ---
-seed_python: 42
-seed_torch: 42
+seed_python: 0
+seed_torch: 0
 
 # --- Policy ---
 hidden_dim: 128
 num_layers: 1
 
 # --- Training ---
-num_episodes: 1
+num_episodes: 50
 gamma: 0.99
-learning_rate: 0.001
-use_baseline: false
+learning_rate: 0.01
+use_baseline: true
 grad_clip: 1.0
 
 # --- Checkpoints ---

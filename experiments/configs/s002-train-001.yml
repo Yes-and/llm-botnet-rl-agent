@@ -6,6 +6,7 @@ container_name: s002_attacker
 max_steps: 30
 model: moonshotai/Kimi-K2.6
 timeout: 60
+api_timeout: 60
 max_output_chars: 4000
 dry_run: false
 context_window: 10

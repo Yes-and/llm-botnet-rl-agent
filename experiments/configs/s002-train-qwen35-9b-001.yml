@@ -8,6 +8,7 @@ max_steps: 50
 model: Qwen/Qwen3.5-9B
 timeout: 60
 api_timeout: 60
+reasoning_effort: none
 max_output_chars: 4000
 dry_run: false
 context_window: 5

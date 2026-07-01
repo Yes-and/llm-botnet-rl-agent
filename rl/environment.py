@@ -42,6 +42,7 @@ class EnvironmentConfig:
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
     context_window: int = 10
+    api_timeout: int = 60
 
 
 class Environment:
@@ -59,7 +60,7 @@ class Environment:
         self.config = config
         self._state = EpisodeState()
         self._reward_calc = RewardCalculator()
-        self._client = LLMClient(model=config.model)
+        self._client = LLMClient(model=config.model, api_timeout=config.api_timeout)
         self._executor = Executor(
             config.container_name,
             dry_run=config.dry_run,

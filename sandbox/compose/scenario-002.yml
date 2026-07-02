@@ -58,3 +58,6 @@ networks:
   s002_net:
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

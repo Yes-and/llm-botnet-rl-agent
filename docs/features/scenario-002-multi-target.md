@@ -90,6 +90,10 @@ Assessment: all five targets compromised. The agent demonstrated recovery behavi
 
 **Known constraint:** Hydra is unreliable against Telnet in this setup. The 60s command timeout fires before Hydra finishes the protocol negotiation. The agent's Python fallback is the effective technique for Telnet credential testing.
 
+## Network Configuration
+
+The internal network uses subnet `172.20.0.0/24` (explicit `ipam` block in the compose file). Without an explicit subnet, Docker defaults to `/16`, which caused nmap broad scans to return up to 16 hosts including Docker infrastructure addresses — corrupting the agent's host count. Always specify `/24` for new scenarios.
+
 ## Open Issues
 
 - **No win condition detection:** episode runs to `max_steps` regardless of how many targets are compromised. The RL environment (`rl/environment.py`) detects exploitation attacker-side via output parsing. An observer container (ADR 005) remains a fallback for cases where success is silent and undetectable from attacker output.

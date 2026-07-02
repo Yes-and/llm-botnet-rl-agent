@@ -54,6 +54,7 @@ When adding a new binary to the attacker container, update all five of these:
 ## Sandbox Rules
 
 - All Docker networks must use `internal: true` — no container should have external internet access.
+- Always specify an explicit `/24` subnet in the `ipam` block for every network. Without it, Docker defaults to `/16`, which lets a broad nmap scan find ghost IPs and Docker infrastructure addresses, corrupting the agent's host discovery state.
 - Keep scenarios independent. Compose files under `sandbox/compose/` must not share networks or volumes.
 - Avoid elevated container privileges. If `--privileged` is ever needed, document the reason explicitly.
 

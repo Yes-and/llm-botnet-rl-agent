@@ -63,6 +63,13 @@ A sliding window limits history to the last `context_window` complete exchanges.
 
 Step log lines include `hosts=N` showing the number of known hosts at the time the action was selected — useful for diagnosing whether host discovery is flowing into state.
 
+## Logging
+
+Two log files are written per run:
+
+- `train.log` — INFO from `rl.*` and `agent.*` only. Step lines, episode summaries, warnings, errors. Small; use this for monitoring.
+- `train.debug.log` — DEBUG from all loggers including the OpenAI SDK. Full request/response payloads and HTTP transport details. Large; open only when debugging a specific issue.
+
 ## Edge Cases
 
 | Situation | Behaviour |
@@ -71,6 +78,7 @@ Step log lines include `hosts=N` showing the number of known hosts at the time t
 | `host_idx` out of range for a non-broadcast action | Step penalty applied, step skipped (`info["skip"] = "invalid_host_idx"`) |
 | LLM produces no tool call | Step penalty applied, step skipped (`info["skip"] = "no_tool_call"`); the dangling instruction is popped from message history to keep history well-formed |
 | Same exploit detected twice | Reward only on first detection; `shell_access` already True blocks re-reward |
+| Unexpected exception in `step()` | Full traceback logged via `logger.exception`; step skipped with `info["skip"] = "unexpected_error"`. Training continues rather than crashing. |
 
 ## Files
 

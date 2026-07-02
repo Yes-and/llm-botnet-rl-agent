@@ -148,6 +148,21 @@ class Environment:
                 "step": self._step_count,
                 "skip": skip,
             }
+        except Exception as exc:
+            self._messages.pop()
+            logger.exception("Unexpected error in step(), skipping: %s", exc)
+            reward = self._reward_calc.step()
+            self._step_count += 1
+            done = self._step_count >= self.config.max_steps
+            logger.info(
+                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=unexpected_error",
+                self._step_count, self.config.max_steps,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
+            )
+            return self._state.to_tensor(), reward, done, {
+                "step": self._step_count,
+                "skip": "unexpected_error",
+            }
 
         self._messages.append(request.assistant_message)
 

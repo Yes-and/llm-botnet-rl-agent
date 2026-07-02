@@ -173,6 +173,7 @@ print(f"Seeds:       python={seed_python}  torch={seed_torch}")
 print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
 print(f"Results:     {results_dir}")
 print(f"Log:         {log_file}")
+print(f"Debug log:   {log_file.replace('.log', '.debug.log')}")
 print()
 
 # ── Training loop ─────────────────────────────────────────────────────────────
@@ -265,3 +266,4 @@ print(f"Best reward:   {max(episode_rewards):+.1f}")
 print(f"Total time:    {total_elapsed:.1f}s  ({total_elapsed / num_episodes:.1f}s/ep)")
 print(f"Results:       {results_dir}")
 print(f"Log:           {log_file}")
+print(f"Debug log:     {log_file.replace('.log', '.debug.log')}")

@@ -49,6 +49,8 @@ class LLMClient:
             )
         tool_call = message.tool_calls[0]
         args = json.loads(tool_call.function.arguments)
+        if not isinstance(args, dict) or "command" not in args:
+            raise ValueError(f"Malformed tool call arguments: {tool_call.function.arguments!r}")
         return CommandRequest(
             command=args["command"],
             tool_call_id=tool_call.id,

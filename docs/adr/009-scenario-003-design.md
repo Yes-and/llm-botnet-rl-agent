@@ -1,6 +1,6 @@
 # ADR 009: Scenario-003 — Mixed-Target Environment Design
 
-**Status:** Proposed (contended — not yet agreed)
+**Status:** Accepted
 
 ## Context
 
@@ -60,3 +60,15 @@ Total: 10 discovered hosts (plus the attacker and gateway = 12 on the subnet). T
 **Parametric difficulty (config-driven host mix):** A single Compose template with configurable host counts and hardening levels. Rejected as premature — adds significant complexity before we know what mix is useful for training.
 
 **Rate-limited services as "hardening":** Add SSH rate limiting or account lockout instead of strong passwords. Rejected — interacts poorly with the 60s command timeout and makes the environment non-deterministic in ways that complicate reward attribution.
+
+## Known Constraints (appended 2026-07-03)
+
+**Final host mix:** 5 exploitable + 5 hardened (one mirror of each service type) + 2 dead = 12 targets. Episode length: 80 steps. The original Decision section's provisional mix (2 hardened, 3 dead) is superseded by this.
+
+**Implementation status:** Compose file created at `sandbox/compose/scenario-003.yml` (subnet 172.21.0.0/24). New Dockerfiles created for `ssh-hardened`, `ftp-hardened`, `telnet-hardened`. Hardened Redis uses `--requirepass` via compose command; hardened MongoDB uses `MONGO_INITDB_ROOT_USERNAME/PASSWORD` env vars on the official image — no custom Dockerfiles needed for those two.
+
+**Policy architecture limitation — parallel heads:** The current `Policy` network uses a host head and action head that share a trunk but are otherwise independent. The action head does not receive the selected host's features as input. This means the policy cannot tightly reason "pick host X AND pick the action appropriate for host X's specific state." It can learn global patterns (e.g. "probe_redis is high-value") and per-slot suppression (e.g. "slot 3 has tried_probe_redis=1 and shell_access=0, avoid it"), but the coupling between host selection and action selection is weak.
+
+In scenario-003, this is a meaningful constraint: the policy may learn that a given action is globally high-value but still waste steps applying it to hardened hosts. Triage for dead hosts (clean port scan signal) should emerge more easily than triage for hardened hosts (requires correlating tried_* + shell_access=0 across the flattened input).
+
+If triage fails to emerge after a reasonable number of episodes, the fix is to condition the action head on the selected host's feature vector. That change is deferred until training results are available.

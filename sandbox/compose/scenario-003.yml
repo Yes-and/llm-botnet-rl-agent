@@ -1,0 +1,124 @@
+name: scenario-003
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s003_attacker
+    networks:
+      - s003_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /home/agent
+    stdin_open: true
+    tty: true
+
+  # --- Exploitable hosts ---
+
+  ssh-target:
+    build: ../images/target
+    container_name: s003_ssh
+    hostname: ssh-target
+    networks:
+      - s003_net
+
+  ftp-target:
+    build: ../images/ftp-target
+    container_name: s003_ftp
+    hostname: ftp-target
+    networks:
+      - s003_net
+
+  telnet-target:
+    build: ../images/telnet-target
+    container_name: s003_telnet
+    hostname: telnet-target
+    networks:
+      - s003_net
+
+  redis-target:
+    image: redis:latest
+    container_name: s003_redis
+    hostname: redis-target
+    command: redis-server --protected-mode no
+    networks:
+      - s003_net
+
+  mongodb-target:
+    image: mongo:4.4
+    container_name: s003_mongodb
+    hostname: mongodb-target
+    networks:
+      - s003_net
+
+  # --- Hardened hosts (same services, not exploitable with available tools) ---
+
+  ssh-hardened:
+    build: ../images/ssh-hardened
+    container_name: s003_ssh_hard
+    hostname: ssh-hardened
+    networks:
+      - s003_net
+
+  ftp-hardened:
+    build: ../images/ftp-hardened
+    container_name: s003_ftp_hard
+    hostname: ftp-hardened
+    networks:
+      - s003_net
+
+  telnet-hardened:
+    build: ../images/telnet-hardened
+    container_name: s003_telnet_hard
+    hostname: telnet-hardened
+    networks:
+      - s003_net
+
+  redis-hardened:
+    image: redis:latest
+    container_name: s003_redis_hard
+    hostname: redis-hardened
+    command: redis-server --requirepass "Xk9mP2vL8nQ5rT"
+    networks:
+      - s003_net
+
+  mongodb-hardened:
+    image: mongo:4.4
+    container_name: s003_mongodb_hard
+    hostname: mongodb-hardened
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: "Xk9mP2vL8nQ5rT"
+    networks:
+      - s003_net
+
+  # --- Dead hosts (ping-visible, no open ports) ---
+
+  dead-1:
+    image: alpine:latest
+    container_name: s003_dead_1
+    hostname: dead-1
+    command: sleep infinity
+    networks:
+      - s003_net
+
+  dead-2:
+    image: alpine:latest
+    container_name: s003_dead_2
+    hostname: dead-2
+    command: sleep infinity
+    networks:
+      - s003_net
+
+networks:
+  s003_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24

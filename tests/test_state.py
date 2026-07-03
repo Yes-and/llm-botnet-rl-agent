@@ -59,11 +59,12 @@ def test_host_features_returns_knowledge_only():
     assert features["port_22_open"] is True
 
 
-def test_known_hosts_sorted_numerically():
+def test_known_hosts_returns_all_discovered_hosts():
     state = EpisodeState()
-    for ip in ["10.0.0.10", "10.0.0.2", "10.0.0.1"]:
+    ips = {"10.0.0.10", "10.0.0.2", "10.0.0.1"}
+    for ip in ips:
         state.set(ip, "is_alive", True)
-    assert state.known_hosts() == ["10.0.0.1", "10.0.0.2", "10.0.0.10"]
+    assert set(state.known_hosts()) == ips
 
 
 def test_to_tensor_shape():
@@ -74,22 +75,27 @@ def test_to_tensor_shape():
     assert t.dtype == torch.float32
 
 
-def test_to_tensor_host_in_correct_slot():
+def test_to_tensor_slot_consistent_with_known_hosts():
     state = EpisodeState()
     state.update("10.0.0.2", {"is_alive": True, "port_22_open": True})
     state.update("10.0.0.1", {"is_alive": True})
     t = state.to_tensor()
-    # 10.0.0.1 sorts first → slot 0, 10.0.0.2 → slot 1
-    assert t[0, FEATURE_INDEX["is_alive"]] == 1.0
-    assert t[0, FEATURE_INDEX["port_22_open"]] == 0.0
-    assert t[1, FEATURE_INDEX["port_22_open"]] == 1.0
+    hosts = state.known_hosts()
+    # known_hosts()[i] must appear in tensor row i with the correct features
+    for i, ip in enumerate(hosts):
+        assert t[i, FEATURE_INDEX["is_alive"]] == 1.0
+    slot_of_2 = hosts.index("10.0.0.2")
+    slot_of_1 = hosts.index("10.0.0.1")
+    assert t[slot_of_2, FEATURE_INDEX["port_22_open"]] == 1.0
+    assert t[slot_of_1, FEATURE_INDEX["port_22_open"]] == 0.0
 
 
 def test_to_tensor_unused_slots_are_zero():
     state = EpisodeState()
     state.set("10.0.0.1", "is_alive", True)
     t = state.to_tensor()
-    assert t[1:].sum() == 0.0
+    # One host → exactly one non-zero row; all other slots remain zero-padded
+    assert (t.sum(dim=1) != 0).sum().item() == 1
 
 
 def test_max_hosts_cap():

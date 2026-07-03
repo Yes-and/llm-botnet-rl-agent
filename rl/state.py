@@ -1,4 +1,4 @@
-import ipaddress
+import random
 from dataclasses import dataclass, field
 
 import torch
@@ -37,16 +37,23 @@ class EpisodeState:
     """
     Attacker-side state for one episode.
 
-    Hosts are stored by IP and sorted numerically when converting to tensor.
+    Hosts are stored by IP. Each host is assigned a random tensor slot on first
+    discovery, so the policy cannot use slot position as a proxy for identity.
     At most MAX_HOSTS hosts are tracked; additional discovered hosts are ignored.
     """
     _hosts: dict[str, list[float]] = field(default_factory=dict)
+    _host_slots: dict[str, int] = field(default_factory=dict)
+    _available_slots: list[int] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.reset()
 
     def _get_or_add(self, ip: str) -> list[float] | None:
         """Return the feature vector for ip, adding it if capacity allows."""
         if ip not in self._hosts:
-            if len(self._hosts) >= MAX_HOSTS:
+            if not self._available_slots:
                 return None
+            self._host_slots[ip] = self._available_slots.pop()
             self._hosts[ip] = [0.0] * NUM_FEATURES
         return self._hosts[ip]
 
@@ -84,13 +91,14 @@ class EpisodeState:
         }
 
     def known_hosts(self) -> list[str]:
-        """Return known host IPs sorted numerically."""
-        return sorted(self._hosts.keys(), key=lambda ip: ipaddress.ip_address(ip))
+        """Return known host IPs sorted by their assigned tensor slot."""
+        return sorted(self._hosts.keys(), key=lambda ip: self._host_slots[ip])
 
     def to_tensor(self) -> torch.Tensor:
         """
         Return state as a float tensor of shape [MAX_HOSTS, NUM_FEATURES].
-        Hosts are sorted by IP; unused slots are zero-padded.
+        Hosts fill rows 0..n-1 in slot order; unused rows are zero-padded.
+        Slot values are sort keys only — they are not used as absolute row indices.
         """
         matrix = torch.zeros(MAX_HOSTS, NUM_FEATURES)
         for i, ip in enumerate(self.known_hosts()):
@@ -99,3 +107,6 @@ class EpisodeState:
 
     def reset(self) -> None:
         self._hosts.clear()
+        self._host_slots.clear()
+        self._available_slots = list(range(MAX_HOSTS))
+        random.shuffle(self._available_slots)

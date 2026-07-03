@@ -44,7 +44,10 @@ def env_mocks():
          patch("rl.environment.Executor") as mock_exec_cls:
         mock_llm = mock_llm_cls.return_value
         mock_exec = mock_exec_cls.return_value
+        mock_exec.execute.return_value = _res()  # exit_code=0 satisfies reachability probe
         env = Environment(EnvironmentConfig(container_name="test", max_steps=3))
+        env.reset()  # initialise _n_header and message history
+        mock_exec.reset_mock()  # clear probe call so tests start with clean call history
         yield env, mock_llm, mock_exec
 
 

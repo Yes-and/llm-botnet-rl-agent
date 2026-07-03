@@ -137,6 +137,13 @@ if _csv_mode == "w":
     _csv_writer.writeheader()
 _rewards_csv.flush()
 
+_STEPS_FIELDS = ["episode", "step", "action"]
+_steps_csv = open(results_dir / "steps.csv", _csv_mode, newline="")
+_steps_writer = csv.DictWriter(_steps_csv, fieldnames=_STEPS_FIELDS)
+if _csv_mode == "w":
+    _steps_writer.writeheader()
+_steps_csv.flush()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _compute_returns(rewards: list[float], gamma: float) -> torch.Tensor:
@@ -205,6 +212,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         rewards.append(reward)
         entropies.append(entropy.item())
         action_counts[action] += 1
+        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action.name})
         if info.get("exploit"):
             exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 
@@ -249,6 +257,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         **{f"act_{a.name.lower()}": action_counts.get(a, 0) for a in Action},
     })
     _rewards_csv.flush()
+    _steps_csv.flush()
 
     if episode % save_every == 0 or episode == num_episodes:
         _save_checkpoint(episode)
@@ -256,6 +265,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
 # ── Final summary ─────────────────────────────────────────────────────────────
 
 _rewards_csv.close()
+_steps_csv.close()
 total_elapsed = time.time() - run_start
 mean_reward = sum(episode_rewards) / len(episode_rewards)
 print()

@@ -138,7 +138,7 @@ if _csv_mode == "w":
     _csv_writer.writeheader()
 _rewards_csv.flush()
 
-_STEPS_FIELDS = ["episode", "step", "action"]
+_STEPS_FIELDS = ["episode", "step", "action", "reward"]
 _steps_csv = open(results_dir / "steps.csv", _csv_mode, newline="")
 _steps_writer = csv.DictWriter(_steps_csv, fieldnames=_STEPS_FIELDS)
 if _csv_mode == "w":
@@ -213,7 +213,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         rewards.append(reward)
         entropies.append(entropy.item())
         action_counts[action] += 1
-        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action.name})
+        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action.name, "reward": reward})
         if info.get("exploit"):
             exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 

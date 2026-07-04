@@ -4,16 +4,23 @@ Heatmap visualisation of policy action sequences across training.
 Modes:
   step     (default)  Each cell = action category at (episode, step).
                       Reads steps.csv, or falls back to parsing train.log.
+                      Reward squares (black outline) shown by default; disable with --no-reward-overlay.
   episode             Each cell = fraction of steps in that action category per episode.
                       Reads rewards.csv.
+  returns             Each cell = discounted return G_t at (episode, step), diverging scale.
+                      Reads steps.csv (requires reward column) or train.log.
+                      Gamma is loaded from run_metadata.json.
 
 Usage:
     python scripts/plot_heatmap.py experiments/results/s003-train-kimi-k25-001/
     python scripts/plot_heatmap.py experiments/results/s003-train-kimi-k25-001/ --mode episode
+    python scripts/plot_heatmap.py experiments/results/s003-train-kimi-k25-001/ --mode returns
+    python scripts/plot_heatmap.py experiments/results/s003-train-kimi-k25-001/ --no-reward-overlay
     python scripts/plot_heatmap.py experiments/results/s003-train-kimi-k25-001/ --out out.png
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -22,7 +29,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import BoundaryNorm, ListedColormap
+from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
 
 # ── Action → category ─────────────────────────────────────────────────────────
 
@@ -58,7 +65,7 @@ def _cat_idx(cat: str) -> int:
 
 # ── Log parser (fallback when steps.csv absent) ───────────────────────────────
 
-_STEP_RE  = re.compile(r"\[Step\s+(\d+)/\d+\] (\w+)")
+_STEP_RE  = re.compile(r"\[Step\s+(\d+)/\d+\] (\w+).*reward=([+-]?\d+\.?\d*)")
 _RESET_RE = re.compile(r"=== Episode reset ===")
 
 
@@ -76,6 +83,7 @@ def _parse_log(log_path: Path) -> pd.DataFrame:
                         "episode": episode,
                         "step":    int(m.group(1)),
                         "action":  m.group(2),
+                        "reward":  float(m.group(3)),
                     })
     if not rows:
         sys.exit(f"No step lines found in {log_path}. Check the log format.")
@@ -115,7 +123,7 @@ def _plot_episode(results_dir: Path, out: Path) -> None:
 
 # ── Step mode ─────────────────────────────────────────────────────────────────
 
-def _plot_step(results_dir: Path, out: Path) -> None:
+def _plot_step(results_dir: Path, out: Path, reward_overlay: bool = True) -> None:
     steps_csv = results_dir / "steps.csv"
     log_path  = results_dir / "train.log"
 
@@ -141,6 +149,18 @@ def _plot_step(results_dir: Path, out: Path) -> None:
         (df["step"]    - 1).values.astype(int),
     ] = df["cat_idx"].values
 
+    # Build reward mask if steps.csv includes the reward column (written by train.py).
+    # Positive reward = exploit succeeded at that step.
+    reward_mask = None
+    if "reward" in df.columns:
+        reward_mask = np.zeros((num_episodes, num_steps), dtype=bool)
+        pos = df[df["reward"] > 0]
+        if len(pos) > 0:
+            reward_mask[
+                (pos["episode"] - 1).values.astype(int),
+                (pos["step"]    - 1).values.astype(int),
+            ] = True
+
     masked = np.ma.masked_equal(matrix, -1)
 
     cmap = ListedColormap(COLORS)
@@ -151,6 +171,14 @@ def _plot_step(results_dir: Path, out: Path) -> None:
     fig_w = max(8, num_steps * 0.10)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.imshow(masked, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+
+    if reward_mask is not None and reward_mask.any():
+        for i, j in zip(*np.where(reward_mask)):
+            ax.add_patch(mpatches.Rectangle(
+                (j - 0.5, i - 0.5), 1, 1,
+                linewidth=1.0, edgecolor="black", facecolor="none",
+            ))
+
     ax.set_xlabel("Step")
     ax.set_ylabel("Episode")
     ax.set_title("Action category per step per episode")
@@ -163,12 +191,83 @@ def _plot_step(results_dir: Path, out: Path) -> None:
     print(f"Saved: {out}")
 
 
+# ── Returns mode ─────────────────────────────────────────────────────────────
+
+def _plot_returns(results_dir: Path, out: Path) -> None:
+    steps_csv = results_dir / "steps.csv"
+    log_path  = results_dir / "train.log"
+
+    if steps_csv.exists():
+        df = pd.read_csv(steps_csv)
+    elif log_path.exists():
+        print(f"steps.csv not found — parsing {log_path}")
+        df = _parse_log(log_path)
+    else:
+        sys.exit(f"Neither steps.csv nor train.log found in {results_dir}")
+
+    if "reward" not in df.columns:
+        sys.exit(
+            "No reward column in data. Re-run training with the updated train.py, "
+            "or use a log file (train.log) which includes reward values."
+        )
+
+    gamma = 0.99
+    metadata_path = results_dir / "run_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            gamma = json.load(f).get("config", {}).get("gamma", 0.99)
+    else:
+        print("run_metadata.json not found — using gamma=0.99")
+
+    num_episodes = int(df["episode"].max())
+    num_steps    = int(df["step"].max())
+
+    matrix = np.full((num_episodes, num_steps), np.nan)
+    for ep, group in df.groupby("episode"):
+        sorted_group = group.sort_values("step")
+        ep_rewards = sorted_group["reward"].values
+        G = 0.0
+        returns: list[float] = []
+        for r in reversed(ep_rewards):
+            G = r + gamma * G
+            returns.append(G)
+        returns.reverse()
+        steps = (sorted_group["step"].values - 1).astype(int)
+        matrix[ep - 1, steps] = returns
+
+    masked = np.ma.masked_invalid(matrix)
+    vmin = float(np.nanmin(matrix))
+    vmax = float(np.nanmax(matrix))
+    if vmin >= 0:
+        vmin = -0.1
+    if vmax <= 0:
+        vmax = 0.1
+    norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+
+    cmap = plt.get_cmap("RdBu_r").copy()
+    cmap.set_bad("lightgrey")
+
+    fig_h = max(4, num_episodes * 0.15)
+    fig_w = max(8, num_steps * 0.10)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    im = ax.imshow(masked, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
+    ax.set_xlabel("Step")
+    ax.set_ylabel("Episode")
+    ax.set_title(f"Discounted return G_t per step (γ={gamma})")
+    plt.colorbar(im, ax=ax, label="G_t")
+    fig.tight_layout()
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"Saved: {out}")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 _parser = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
 _parser.add_argument("results_dir", type=Path, help="Run results directory")
-_parser.add_argument("--mode", choices=["step", "episode"], default="step")
+_parser.add_argument("--mode", choices=["step", "episode", "returns"], default="step")
+_parser.add_argument("--no-reward-overlay", dest="reward_overlay", action="store_false",
+                     help="Disable reward squares overlay in step mode (default: shown)")
 _parser.add_argument("--out", type=Path, default=None,
                      help="Output PNG path (default: <results_dir>/heatmap_<mode>.png)")
 _args = _parser.parse_args()
@@ -177,5 +276,7 @@ _out = _args.out or (_args.results_dir / f"heatmap_{_args.mode}.png")
 
 if _args.mode == "episode":
     _plot_episode(_args.results_dir, _out)
+elif _args.mode == "returns":
+    _plot_returns(_args.results_dir, _out)
 else:
-    _plot_step(_args.results_dir, _out)
+    _plot_step(_args.results_dir, _out, reward_overlay=_args.reward_overlay)

@@ -40,22 +40,35 @@ class Policy(nn.Module):
     (host_slot, action) combinations.
 
     Both heads share a single MLP trunk over the flattened state tensor.
-    Heads are parallel — the action head does not take the sampled host as input.
+
+    When conditioned_action_head=False (default), the heads are parallel: the action head
+    receives only the trunk output and cannot condition on the selected host's features.
+
+    When conditioned_action_head=True, the selected host's feature vector is concatenated
+    to the trunk output before the action head, enabling per-host action preferences.
+    This allows the policy to learn to skip a host whose tried_* features indicate prior
+    failure, rather than learning only global action preferences.
     """
 
-    def __init__(self, hidden_dim: int = 128, num_layers: int = 2):
+    def __init__(
+        self,
+        hidden_dim: int = 128,
+        num_layers: int = 2,
+        conditioned_action_head: bool = False,
+    ):
         super().__init__()
-        input_dim = MAX_HOSTS * NUM_FEATURES
+        self._conditioned = conditioned_action_head
 
         layers: list[nn.Module] = []
-        in_dim = input_dim
+        in_dim = MAX_HOSTS * NUM_FEATURES
         for _ in range(num_layers):
             layers.extend([nn.Linear(in_dim, hidden_dim), nn.ReLU()])
             in_dim = hidden_dim
         self.trunk = nn.Sequential(*layers)
 
         self.host_head = nn.Linear(hidden_dim, NUM_HOST_SLOTS)
-        self.action_head = nn.Linear(hidden_dim, NUM_ACTIONS)
+        action_in_dim = hidden_dim + (NUM_FEATURES if conditioned_action_head else 0)
+        self.action_head = nn.Linear(action_in_dim, NUM_ACTIONS)
 
     def _masked_host_logits(self, hidden: torch.Tensor, known_host_count: int) -> torch.Tensor:
         logits = self.host_head(hidden)
@@ -65,8 +78,27 @@ class Policy(nn.Module):
             logits = logits.masked_fill(empty, float("-inf"))
         return logits
 
-    def _masked_action_logits(self, hidden: torch.Tensor, host_slot: int) -> torch.Tensor:
-        logits = self.action_head(hidden)
+    def _action_input(
+        self, hidden: torch.Tensor, host_slot: int, state: torch.Tensor
+    ) -> torch.Tensor:
+        """Return the input vector for the action head.
+
+        In parallel mode, this is just the trunk output. In conditioned mode, the selected
+        host's feature vector is appended. Broadcast slots (no_host, all_hosts) get a zero
+        vector in place of host features so the action head input dimension stays constant.
+        """
+        if not self._conditioned:
+            return hidden
+        if host_slot >= 2:
+            host_features = state[host_slot - 2]
+        else:
+            host_features = torch.zeros(NUM_FEATURES, device=hidden.device)
+        return torch.cat([hidden, host_features])
+
+    def _masked_action_logits(
+        self, action_input: torch.Tensor, host_slot: int
+    ) -> torch.Tensor:
+        logits = self.action_head(action_input)
         soft_mask = _SOFT_MASK[host_slot].to(logits.device)
         return logits.masked_fill(soft_mask, _SOFT_MASK_VALUE)
 
@@ -74,6 +106,8 @@ class Policy(nn.Module):
         self, state: torch.Tensor, known_host_count: int
     ) -> tuple[Action, int, torch.Tensor, torch.Tensor]:
         """Sample (action, host_slot, log_prob, entropy) for use in the REINFORCE training loop.
+
+        log_prob = log p(host | state) + log p(action | host, state)
 
         Entropy is the sum of host and action head entropies — a proxy for overall policy
         uncertainty. Collapse toward zero signals the policy has stopped exploring.
@@ -83,19 +117,22 @@ class Policy(nn.Module):
         host_logits = self._masked_host_logits(hidden, known_host_count)
         host_dist = Categorical(logits=host_logits)
         host_slot = host_dist.sample()
+        host_slot_int = host_slot.item()
 
-        action_logits = self._masked_action_logits(hidden, host_slot.item())
+        action_input = self._action_input(hidden, host_slot_int, state)
+        action_logits = self._masked_action_logits(action_input, host_slot_int)
         action_dist = Categorical(logits=action_logits)
         action_idx = action_dist.sample()
 
         log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action_idx)
         entropy = host_dist.entropy() + action_dist.entropy()
-        return Action(action_idx.item()), host_slot.item(), log_prob, entropy
+        return Action(action_idx.item()), host_slot_int, log_prob, entropy
 
     def predict(self, state: torch.Tensor, known_host_count: int) -> tuple[Action, int]:
         """Argmax selection for evaluation; no gradient computation."""
         with torch.no_grad():
             hidden = self.trunk(state.flatten())
             host_slot = self._masked_host_logits(hidden, known_host_count).argmax().item()
-            action_idx = self._masked_action_logits(hidden, host_slot).argmax().item()
+            action_input = self._action_input(hidden, host_slot, state)
+            action_idx = self._masked_action_logits(action_input, host_slot).argmax().item()
         return Action(action_idx), host_slot

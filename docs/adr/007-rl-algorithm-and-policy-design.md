@@ -1,6 +1,6 @@
 # ADR 007 — RL Algorithm and Policy Design
 
-**Status: Adopted**
+**Status: Partially superseded by ADR 010**
 
 **Supersedes:** algorithm section of ADR 003; action representation and masking section of ADR 006.
 

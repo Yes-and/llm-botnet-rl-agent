@@ -14,6 +14,12 @@ def policy():
 
 
 @pytest.fixture
+def conditioned_policy():
+    torch.manual_seed(0)
+    return Policy(hidden_dim=64, num_layers=2, conditioned_action_head=True)
+
+
+@pytest.fixture
 def zero_state():
     return torch.zeros(MAX_HOSTS, NUM_FEATURES)
 
@@ -21,11 +27,13 @@ def zero_state():
 # --- Return types ---
 
 def test_sample_return_types(policy, zero_state):
-    action, host_slot, log_prob = policy.sample(zero_state, known_host_count=2)
+    action, host_slot, log_prob, entropy = policy.sample(zero_state, known_host_count=2)
     assert isinstance(action, Action)
     assert isinstance(host_slot, int)
     assert isinstance(log_prob, torch.Tensor)
-    assert log_prob.shape == ()  # scalar
+    assert log_prob.shape == ()
+    assert isinstance(entropy, torch.Tensor)
+    assert entropy.shape == ()
 
 
 def test_predict_return_types(policy, zero_state):
@@ -86,13 +94,13 @@ def test_soft_mask_specific_host_slot(policy, zero_state):
 # --- log_prob validity ---
 
 def test_log_prob_is_scalar(policy, zero_state):
-    _, _, log_prob = policy.sample(zero_state, known_host_count=3)
+    _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
     assert log_prob.ndim == 0
 
 
 def test_log_prob_is_negative(policy, zero_state):
-    _, _, log_prob = policy.sample(zero_state, known_host_count=3)
-    assert log_prob.item() < 0.0  # log of probability < 1
+    _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
+    assert log_prob.item() < 0.0
 
 
 # --- Determinism ---
@@ -106,7 +114,7 @@ def test_predict_is_deterministic(policy, zero_state):
 def test_sample_host_slot_in_range(policy, zero_state):
     known_host_count = 3
     for _ in range(20):
-        _, host_slot, _ = policy.sample(zero_state, known_host_count=known_host_count)
+        _, host_slot, _, _ = policy.sample(zero_state, known_host_count=known_host_count)
         assert 0 <= host_slot < 2 + known_host_count
 
 
@@ -114,3 +122,50 @@ def test_sample_host_slot_in_range(policy, zero_state):
 
 def test_soft_mask_shape():
     assert _SOFT_MASK.shape == (NUM_HOST_SLOTS, NUM_ACTIONS)
+
+
+# --- Conditioned action head ---
+
+def test_conditioned_action_head_dimensions(conditioned_policy):
+    """Action head input should be hidden_dim + NUM_FEATURES when conditioned."""
+    expected_in = 64 + NUM_FEATURES
+    assert conditioned_policy.action_head.in_features == expected_in
+
+
+def test_conditioned_action_input_specific_host(conditioned_policy):
+    """For a specific host slot, _action_input concatenates that host's features."""
+    state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    hidden = conditioned_policy.trunk(state.flatten())
+    action_input = conditioned_policy._action_input(hidden, host_slot=2, state=state)
+    assert action_input.shape == (64 + NUM_FEATURES,)
+    assert torch.allclose(action_input[64:], state[0])  # slot 2 → row 0
+
+
+def test_conditioned_action_input_broadcast_slot_pads_zeros(conditioned_policy):
+    """Broadcast slots (no_host, all_hosts) get zero host features."""
+    state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    hidden = conditioned_policy.trunk(state.flatten())
+    for slot in (0, 1):
+        action_input = conditioned_policy._action_input(hidden, host_slot=slot, state=state)
+        assert action_input.shape == (64 + NUM_FEATURES,)
+        assert torch.all(action_input[64:] == 0.0)
+
+
+def test_conditioned_action_logits_vary_by_host(conditioned_policy):
+    """With conditioning enabled, action logits should differ for different hosts."""
+    state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    hidden = conditioned_policy.trunk(state.flatten())
+    input_0 = conditioned_policy._action_input(hidden, host_slot=2, state=state)
+    input_1 = conditioned_policy._action_input(hidden, host_slot=3, state=state)
+    logits_0 = conditioned_policy._masked_action_logits(input_0, host_slot=2)
+    logits_1 = conditioned_policy._masked_action_logits(input_1, host_slot=3)
+    assert not torch.allclose(logits_0, logits_1)
+
+
+def test_conditioned_sample_returns_valid_types(conditioned_policy):
+    state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    action, host_slot, log_prob, entropy = conditioned_policy.sample(state, known_host_count=4)
+    assert isinstance(action, Action)
+    assert isinstance(host_slot, int)
+    assert log_prob.ndim == 0
+    assert log_prob.item() < 0.0

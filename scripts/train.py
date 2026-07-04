@@ -87,6 +87,7 @@ env = Environment(env_config)
 policy = Policy(
     hidden_dim=raw.get("hidden_dim", 128),
     num_layers=raw.get("num_layers", 2),
+    conditioned_action_head=raw.get("conditioned_action_head", False),
 )
 optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
 

@@ -1,0 +1,31 @@
+# Smoke test — MiniMaxAI/MiniMax-M2.5 tool-call compliance check on scenario-003
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 10
+model: MiniMaxAI/MiniMax-M2.5
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+
+# --- Training ---
+num_episodes: 1
+gamma: 0.99
+learning_rate: 0.001
+use_baseline: false
+grad_clip: 1.0
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

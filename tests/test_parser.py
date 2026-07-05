@@ -317,13 +317,21 @@ def test_ftp_pylib(command, exit_code, output, ip, expect_access, expect_vuln):
 # ── FTP (binary) ──────────────────────────────────────────────────────────────
 
 def test_ftp_bin_success():
-    # step 18: ftp binary with heredoc, empty output, exit 0
     command = "ftp -p -n 172.18.0.4 <<'EOF'\nuser anonymous anonymous\nls\nbye\nEOF"
-    result = parse_step(command, "", 0)
+    output = "Connected to 172.18.0.4.\n220 (vsFTPd 3.0.5)\n230 Login successful.\nRemote system type is UNIX.\n"
+    result = parse_step(command, output, 0)
     updates = dict(result.state_updates)
     assert updates.get("172.18.0.4", {}).get("shell_access") is True
     assert result.exploit is not None
     assert result.exploit.vulnerability == "ftp_anonymous_login"
+
+
+def test_ftp_bin_false_positive():
+    # ftp binary exits 0 on a non-FTP host (connection refused) — must not emit exploit
+    command = "ftp -p -n 172.18.0.3 <<'EOF'\nuser anonymous anonymous\nbye\nEOF"
+    output = "ftp: connect: Connection refused\n"
+    result = parse_step(command, output, 0)
+    assert result.exploit is None
 
 
 def test_ftp_bin_failure():
@@ -368,6 +376,19 @@ def test_telnetlib_login_prompt_detected():
     assert updates.get("172.18.0.6", {}).get("port_23_open") is True
     assert updates.get("172.18.0.6", {}).get("is_alive") is True
     assert result.exploit is None
+
+
+def test_telnetlib_shell_access_success():
+    # Successful login: login prompt seen and LLM ran 'id' after authenticating
+    command = "python3 -c \"\nimport telnetlib\nt = telnetlib.Telnet('172.18.0.6', 23, timeout=5)\nt.read_until(b'login:')\nt.write(b'admin\\n')\nt.read_until(b'Password:')\nt.write(b'admin123\\n')\nprint(t.read_until(b'$', timeout=3).decode())\nt.write(b'id\\n')\nprint(t.read_until(b'$', timeout=3).decode())\n\""
+    output = "Ubuntu 22.04 LTS\ntelnet-target login: admin\nPassword: \nWelcome to Ubuntu 22.04\nadmin@telnet-target:~$ uid=1000(admin) gid=1000(admin) groups=1000(admin)\n"
+    result = parse_step(command, output, 0)
+    updates = dict(result.state_updates)
+    assert updates.get("172.18.0.6", {}).get("service_telnet") is True
+    assert updates.get("172.18.0.6", {}).get("shell_access") is True
+    assert result.exploit is not None
+    assert result.exploit.host == "172.18.0.6"
+    assert result.exploit.vulnerability == "telnet_weak_credentials"
 
 
 def test_telnetlib_no_login_prompt_returns_empty():

@@ -186,6 +186,9 @@ def _parse_ftp_pylib(command: str, output: str, exit_code: int) -> ParseResult:
     ip = m.group(1)
     if "Traceback" in output:
         return ParseResult()
+    # Note: ftplib does not print the 230 response to stdout, so we cannot check for it.
+    # Connection failures raise exceptions (ConnectionRefusedError, error_perm) which
+    # produce a Traceback — that check above covers the common failure modes.
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],
         exploit=ExploitEvent(host=ip, vulnerability="ftp_anonymous_login"),
@@ -199,6 +202,9 @@ def _parse_ftp_bin(command: str, output: str, exit_code: int) -> ParseResult:
     if not m:
         return ParseResult()
     ip = m.group(1)
+    # ftp binary exits 0 even on refused/failed login — require the 230 success response
+    if "230" not in output:
+        return ParseResult()
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],
         exploit=ExploitEvent(host=ip, vulnerability="ftp_anonymous_login"),
@@ -212,12 +218,17 @@ def _parse_telnetlib(command: str, output: str, exit_code: int) -> ParseResult:
     if not m:
         return ParseResult()
     ip = m.group(1)
-    # A login prompt confirms the telnet service is reachable
     if "login:" not in output:
         return ParseResult()
-    return ParseResult(
-        state_updates=[(ip, {"service_telnet": True, "port_23_open": True, "is_alive": True})],
-    )
+    # Service detected — update state regardless of login outcome
+    service_updates = {"service_telnet": True, "port_23_open": True, "is_alive": True}
+    # Successful login confirmed by shell command output (LLM runs 'id' after login)
+    if "uid=" in output:
+        return ParseResult(
+            state_updates=[(ip, {**service_updates, "shell_access": True})],
+            exploit=ExploitEvent(host=ip, vulnerability="telnet_weak_credentials"),
+        )
+    return ParseResult(state_updates=[(ip, service_updates)])
 
 
 def _parse_ssh(command: str, output: str, exit_code: int) -> ParseResult:

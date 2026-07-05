@@ -172,7 +172,7 @@ def _plot_step(results_dir: Path, out: Path, reward_overlay: bool = True) -> Non
     fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     ax.imshow(masked, aspect="auto", cmap=cmap, norm=norm, interpolation="nearest")
 
-    if reward_mask is not None and reward_mask.any():
+    if reward_overlay and reward_mask is not None and reward_mask.any():
         for i, j in zip(*np.where(reward_mask)):
             ax.add_patch(mpatches.Rectangle(
                 (j - 0.5, i - 0.5), 1, 1,

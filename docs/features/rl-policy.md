@@ -38,7 +38,9 @@ Host slots beyond `len(known_hosts())` are hard-masked to `-inf` before softmax.
 
 Outputs a distribution over all 13 action types (see `rl/actions.py`). Structurally invalid `(host, action)` combinations (e.g. `SCAN_NETWORK` with a specific host slot) are soft-masked: logits are pushed to a large negative value, keeping near-zero probability without hard exclusion.
 
-No feature-based masking is applied. The policy is not prevented from attempting an action whose preconditions have not been confirmed — it learns through reward signal whether recon-before-attack is beneficial.
+A single dynamic hard mask is applied at inference time: if a host's `shell_access` feature is `1`, all `CONNECT_*` actions (`CONNECT_SSH`, `CONNECT_FTP`, `CONNECT_TELNET`) are masked to `-inf` for that host slot. This prevents re-exploitation of already-compromised hosts — a case where the negative reward signal alone proved insufficient (s003 MiniMax M2.5 conditioned run, episode 49).
+
+All other precondition checks (port open, creds found, etc.) are left to the learned reward signal rather than hard-masking, to avoid over-constraining the agent's exploration.
 
 ### Parallel mode (`conditioned_action_head: false`)
 

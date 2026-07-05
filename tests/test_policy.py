@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import pytest
 
 from rl.actions import Action, BROADCAST_ACTIONS
-from rl.policy import Policy, NUM_HOST_SLOTS, NUM_ACTIONS, _SOFT_MASK
+from rl.policy import Policy, NUM_HOST_SLOTS, NUM_ACTIONS, _SOFT_MASK, _SHELL_ACCESS_IDX
 from rl.state import MAX_HOSTS, NUM_FEATURES
 
 
@@ -70,7 +70,7 @@ def test_hard_mask_full_hosts(policy):
 
 def test_soft_mask_no_host_slot(policy, zero_state):
     hidden = policy.trunk(zero_state.flatten())
-    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=0), dim=-1)
+    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=0, state=zero_state), dim=-1)
     for a in Action:
         if a != Action.DO_NOTHING:
             assert probs[int(a)].item() < 1e-6, f"{a.name} should be near-zero for no_host"
@@ -78,7 +78,7 @@ def test_soft_mask_no_host_slot(policy, zero_state):
 
 def test_soft_mask_all_hosts_slot(policy, zero_state):
     hidden = policy.trunk(zero_state.flatten())
-    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=1), dim=-1)
+    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=1, state=zero_state), dim=-1)
     for a in Action:
         if a != Action.SCAN_NETWORK:
             assert probs[int(a)].item() < 1e-6, f"{a.name} should be near-zero for all_hosts"
@@ -86,9 +86,20 @@ def test_soft_mask_all_hosts_slot(policy, zero_state):
 
 def test_soft_mask_specific_host_slot(policy, zero_state):
     hidden = policy.trunk(zero_state.flatten())
-    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=2), dim=-1)
+    probs = F.softmax(policy._masked_action_logits(hidden, host_slot=2, state=zero_state), dim=-1)
     for a in BROADCAST_ACTIONS:
         assert probs[int(a)].item() < 1e-6, f"{a.name} should be near-zero for specific host"
+
+
+def test_shell_access_masks_connect_actions(policy, zero_state):
+    """CONNECT_* must be near-zero for a host with shell_access=True."""
+    state = zero_state.clone()
+    state[0, _SHELL_ACCESS_IDX] = 1.0  # slot 2 maps to row 0
+    hidden = policy.trunk(state.flatten())
+    action_input = policy._action_input(hidden, host_slot=2, state=state)
+    probs = F.softmax(policy._masked_action_logits(action_input, host_slot=2, state=state), dim=-1)
+    for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET):
+        assert probs[int(a)].item() < 1e-6, f"{a.name} should be masked when shell_access=True"
 
 
 # --- log_prob validity ---
@@ -157,8 +168,8 @@ def test_conditioned_action_logits_vary_by_host(conditioned_policy):
     hidden = conditioned_policy.trunk(state.flatten())
     input_0 = conditioned_policy._action_input(hidden, host_slot=2, state=state)
     input_1 = conditioned_policy._action_input(hidden, host_slot=3, state=state)
-    logits_0 = conditioned_policy._masked_action_logits(input_0, host_slot=2)
-    logits_1 = conditioned_policy._masked_action_logits(input_1, host_slot=3)
+    logits_0 = conditioned_policy._masked_action_logits(input_0, host_slot=2, state=state)
+    logits_1 = conditioned_policy._masked_action_logits(input_1, host_slot=3, state=state)
     assert not torch.allclose(logits_0, logits_1)
 
 

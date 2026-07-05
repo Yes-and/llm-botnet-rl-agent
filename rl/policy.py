@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.distributions import Categorical
 
 from rl.actions import Action, BROADCAST_ACTIONS
-from rl.state import MAX_HOSTS, NUM_FEATURES
+from rl.state import FEATURE_INDEX, MAX_HOSTS, NUM_FEATURES
 
 NUM_ACTIONS = len(Action)
 NUM_HOST_SLOTS = MAX_HOSTS + 2  # slot 0: no_host, slot 1: all_hosts, slots 2..: discovered hosts
@@ -29,6 +29,9 @@ def _build_soft_mask() -> torch.Tensor:
 
 
 _SOFT_MASK = _build_soft_mask()
+
+_SHELL_ACCESS_IDX = FEATURE_INDEX["shell_access"]
+_CONNECT_ACTION_INDICES = [int(a) for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET)]
 
 
 class Policy(nn.Module):
@@ -96,10 +99,12 @@ class Policy(nn.Module):
         return torch.cat([hidden, host_features])
 
     def _masked_action_logits(
-        self, action_input: torch.Tensor, host_slot: int
+        self, action_input: torch.Tensor, host_slot: int, state: torch.Tensor
     ) -> torch.Tensor:
         logits = self.action_head(action_input)
-        soft_mask = _SOFT_MASK[host_slot].to(logits.device)
+        soft_mask = _SOFT_MASK[host_slot].clone().to(logits.device)
+        if host_slot >= 2 and state[host_slot - 2, _SHELL_ACCESS_IDX].bool():
+            soft_mask[_CONNECT_ACTION_INDICES] = True
         return logits.masked_fill(soft_mask, _SOFT_MASK_VALUE)
 
     def sample(
@@ -120,7 +125,7 @@ class Policy(nn.Module):
         host_slot_int = host_slot.item()
 
         action_input = self._action_input(hidden, host_slot_int, state)
-        action_logits = self._masked_action_logits(action_input, host_slot_int)
+        action_logits = self._masked_action_logits(action_input, host_slot_int, state)
         action_dist = Categorical(logits=action_logits)
         action_idx = action_dist.sample()
 
@@ -134,5 +139,5 @@ class Policy(nn.Module):
             hidden = self.trunk(state.flatten())
             host_slot = self._masked_host_logits(hidden, known_host_count).argmax().item()
             action_input = self._action_input(hidden, host_slot, state)
-            action_idx = self._masked_action_logits(action_input, host_slot).argmax().item()
+            action_idx = self._masked_action_logits(action_input, host_slot, state).argmax().item()
         return Action(action_idx), host_slot

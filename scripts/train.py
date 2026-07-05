@@ -209,13 +209,17 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
 
         state, reward, done, info = env.step(action, host_idx)
 
-        log_probs.append(log_prob)
-        rewards.append(reward)
-        entropies.append(entropy.item())
-        action_counts[action] += 1
-        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action.name, "reward": reward})
-        if info.get("exploit"):
-            exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
+        skip = info.get("skip")
+        if not skip:
+            log_probs.append(log_prob)
+            rewards.append(reward)
+            entropies.append(entropy.item())
+            action_counts[action] += 1
+            if info.get("exploit"):
+                exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
+
+        action_label = action.name if not skip else skip.upper()
+        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action_label, "reward": reward})
 
     # Discounted returns
     returns = _compute_returns(rewards, gamma)

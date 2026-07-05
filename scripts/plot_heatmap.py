@@ -45,6 +45,9 @@ _ACTION_TO_CAT = {
     "BRUTE_FORCE_TELNET":"brute",
     "CONNECT_SSH":       "exploit","CONNECT_FTP":        "exploit",
     "CONNECT_TELNET":    "exploit",
+    # Skipped steps logged by train.py — rendered as nothing
+    "API_TIMEOUT":       "nothing", "NO_TOOL_CALL":      "nothing",
+    "INVALID_HOST_IDX":  "nothing", "UNEXPECTED_ERROR":  "nothing",
 }
 
 # rewards.csv column → category

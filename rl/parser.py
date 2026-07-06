@@ -152,9 +152,10 @@ def _parse_redis_cli(command: str, output: str, exit_code: int) -> ParseResult:
     if not m:
         return ParseResult()
     ip = m.group(1)
-    # ERR/WRONGTYPE/NOAUTH mean the server responded but the command was rejected
-    stripped = output.strip()
-    if stripped.startswith(("ERR", "WRONGTYPE", "NOAUTH", "DENIED")):
+    # Require redis_version: in output — only present in INFO response on an open
+    # (no-auth) server. PING returns "PONG" which proves connectivity, not auth bypass.
+    # An auth-required server returns "NOAUTH Authentication required." for INFO.
+    if "redis_version:" not in output:
         return ParseResult()
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],

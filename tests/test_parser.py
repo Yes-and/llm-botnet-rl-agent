@@ -172,20 +172,28 @@ REDIS_CASES = [
         id="redis-info-success",
     ),
     pytest.param(
-        # KEYS '*' returns empty (steps 8, 9)
+        # KEYS '*' returns empty — no redis_version: in output, not an exploit indicator
         "redis-cli -h 172.18.0.5 KEYS '*'",
         0,
         "",
-        "172.18.0.5", True, "redis_no_auth",
-        id="redis-keys-empty-success",
+        "172.18.0.5", False, None,
+        id="redis-keys-no-exploit",
     ),
     pytest.param(
-        # CONFIG GET returns data (step 10)
+        # CONFIG GET returns data — no redis_version: in output, not an exploit indicator
         "redis-cli -h 172.18.0.5 CONFIG GET dir",
         0,
         "dir\n/data\n",
-        "172.18.0.5", True, "redis_no_auth",
-        id="redis-config-get-success",
+        "172.18.0.5", False, None,
+        id="redis-config-get-no-exploit",
+    ),
+    pytest.param(
+        # PING returns PONG — connectivity only, not auth bypass
+        "redis-cli -h 172.18.0.5 PING",
+        0,
+        "PONG\n",
+        "172.18.0.5", False, None,
+        id="redis-ping-no-exploit",
     ),
     pytest.param(
         # CONFIG SET fails with ERR (step 28)

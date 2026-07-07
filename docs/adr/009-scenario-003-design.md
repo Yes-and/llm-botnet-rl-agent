@@ -72,3 +72,7 @@ Total: 10 discovered hosts (plus the attacker and gateway = 12 on the subnet). T
 In scenario-003, this is a meaningful constraint: the policy may learn that a given action is globally high-value but still waste steps applying it to hardened hosts. Triage for dead hosts (clean port scan signal) should emerge more easily than triage for hardened hosts (requires correlating tried_* + shell_access=0 across the flattened input).
 
 If triage fails to emerge after a reasonable number of episodes, the fix is to condition the action head on the selected host's feature vector. That change is deferred until training results are available.
+
+## Update (2026-07-07)
+
+The conditioned-action-head fix described above shipped as ADR 010 (`conditioned_action_head` config flag) and was exercised in the `conditioned-001` through `conditioned-004` runs. Triage still did not reliably emerge in those runs, but for a different reason than originally suspected here: investigation traced it to SSH/FTP/Telnet requiring a multi-command chain (recon → brute-force → connect) that a policy issuing one command per step rarely completes by coincidence — not solely to the parallel-heads coupling problem. ADR 011 (action-duration head) addresses this by letting the policy commit to multiple consecutive tries on one action. Full validation (does triage now emerge on hardened hosts) is still pending a real training run with duration enabled.

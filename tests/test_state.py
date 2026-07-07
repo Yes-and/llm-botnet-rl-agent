@@ -1,6 +1,6 @@
 import pytest
 import torch
-from rl.actions import Action
+from rl.actions import Action, BROADCAST_ACTIONS
 from rl.state import (
     EpisodeState,
     MAX_HOSTS,
@@ -17,7 +17,12 @@ def test_feature_index_covers_all_features():
 
 
 def test_coverage_features_cover_all_actions():
-    assert len(COVERAGE_FEATURES) == len(Action)
+    assert len(COVERAGE_FEATURES) == len(Action) - len(BROADCAST_ACTIONS)
+
+
+def test_coverage_features_exclude_broadcast_actions():
+    for action in BROADCAST_ACTIONS:
+        assert f"tried_{action.name.lower()}" not in COVERAGE_FEATURES
 
 
 def test_set_and_get():
@@ -46,7 +51,7 @@ def test_mark_tried():
     state.set("10.0.0.1", "is_alive", True)
     state.mark_tried("10.0.0.1", Action.SCAN_PORTS)
     assert state.get("10.0.0.1", "tried_scan_ports") is True
-    assert state.get("10.0.0.1", "tried_scan_network") is False
+    assert state.get("10.0.0.1", "tried_probe_port") is False
 
 
 def test_host_features_returns_knowledge_only():

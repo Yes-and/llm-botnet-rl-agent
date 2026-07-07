@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-from rl.actions import Action
+from rl.actions import Action, BROADCAST_ACTIONS
 
 MAX_HOSTS = 16
 
@@ -25,7 +25,12 @@ KNOWLEDGE_FEATURES = [
     "is_root",
 ]
 
-COVERAGE_FEATURES = [f"tried_{action.name.lower()}" for action in Action]
+# Broadcast actions (DO_NOTHING, SCAN_NETWORK) aren't tracked per-host — mark_tried()
+# is only called with a resolved host IP, which broadcast actions never have (see
+# Environment._resolve_host). Including them here would leave two always-zero columns.
+COVERAGE_FEATURES = [
+    f"tried_{action.name.lower()}" for action in Action if action not in BROADCAST_ACTIONS
+]
 
 ALL_FEATURES = KNOWLEDGE_FEATURES + COVERAGE_FEATURES
 NUM_FEATURES = len(ALL_FEATURES)

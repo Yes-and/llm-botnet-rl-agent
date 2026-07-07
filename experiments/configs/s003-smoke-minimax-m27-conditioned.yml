@@ -1,0 +1,40 @@
+# Smoke test — MiniMaxAI/MiniMax-M2.7 on scenario-003, conditioned action head + duration head
+# Swapped from M2.5 (glitching) to M2.7. Otherwise identical to
+# s003-smoke-minimax-m25-conditioned.yml — run this before the -001 training config below to
+# confirm the new model behaves (tool calls parse, no chronic timeouts) at small scale first.
+# Commit this file before running. Results are gitignored.
+# context_window must be >= max(duration_options) (see ADR 011) — train.py refuses to
+# start otherwise, since a block longer than the window would lose visibility into its
+# own earlier tries mid-block.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 10
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 1
+gamma: 0.99
+learning_rate: 0.001
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

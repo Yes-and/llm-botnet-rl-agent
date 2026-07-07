@@ -1,0 +1,41 @@
+# REINFORCE training run — scenario-003 (mixed-target: 5 exploitable, 5 hardened, 2 dead)
+# Model: MiniMaxAI/MiniMax-M2.7, conditioned action head + duration head
+# Swapped from M2.5 (glitching) to M2.7. Hyperparameters are otherwise a direct carry-over
+# from s003-train-minimax-m25-conditioned-005.yml — the duration-head run that never
+# executed on M2.5. This is the first real attempt at that run, on the new model.
+# Also trains on the current RL infra as of the 2026-07-07 audit: 26-feature state tensor
+# (was 28) and a hard mask on BRUTE_FORCE_* once creds_found=True (see project memory) —
+# both landed before this run started, so there's nothing to reconcile mid-run.
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 0
+seed_torch: 0
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 30
+gamma: 0.95
+learning_rate: 0.001
+use_baseline: true
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

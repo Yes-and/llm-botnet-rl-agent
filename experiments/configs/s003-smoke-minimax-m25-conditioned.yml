@@ -1,9 +1,12 @@
-# Smoke test — MiniMaxAI/MiniMax-M2.5 on scenario-003, conditioned action head
+# Smoke test — MiniMaxAI/MiniMax-M2.5 on scenario-003, conditioned action head + duration head
 # Commit this file before running. Results are gitignored.
+# context_window must be >= max(duration_options) (see ADR 011) — train.py refuses to
+# start otherwise, since a block longer than the window would lose visibility into its
+# own earlier tries mid-block.
 
 # --- Environment ---
 container_name: s003_attacker
-max_steps: 5
+max_steps: 10
 model: MiniMaxAI/MiniMax-M2.5
 timeout: 60
 api_timeout: 60
@@ -19,6 +22,7 @@ seed_torch: 42
 hidden_dim: 128
 num_layers: 1
 conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
 
 # --- Training ---
 num_episodes: 1
@@ -26,6 +30,7 @@ gamma: 0.99
 learning_rate: 0.001
 use_baseline: false
 grad_clip: 1.0
+entropy_coeff: 0.01
 
 # --- Checkpoints ---
 save_every: 10

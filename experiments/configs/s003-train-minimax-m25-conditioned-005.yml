@@ -1,0 +1,41 @@
+# REINFORCE training run — scenario-003 (mixed-target: 5 exploitable, 5 hardened, 2 dead)
+# Model: MiniMaxAI/MiniMax-M2.5, conditioned action head + duration head
+# Changes from -004: duration_options=[1,2,3,5] added (ADR 011) — lets the policy commit
+#                    to multiple consecutive tries on one action, needed for chained
+#                    exploits (SSH/FTP/Telnet) that -004 could never complete in one step.
+#                    context_window 2→5 to match max(duration_options); train.py refuses
+#                    to start otherwise, since a block longer than the window would lose
+#                    visibility into its own earlier tries mid-block.
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+model: MiniMaxAI/MiniMax-M2.5
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 0
+seed_torch: 0
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 30
+gamma: 0.95
+learning_rate: 0.001
+use_baseline: true
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

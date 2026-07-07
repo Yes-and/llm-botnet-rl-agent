@@ -4,7 +4,15 @@ import pytest
 from torch.distributions import Categorical
 
 from rl.actions import Action, BROADCAST_ACTIONS
-from rl.policy import Policy, NUM_HOST_SLOTS, NUM_ACTIONS, DEFAULT_DURATION_OPTIONS, _SOFT_MASK, _SHELL_ACCESS_IDX
+from rl.policy import (
+    Policy,
+    NUM_HOST_SLOTS,
+    NUM_ACTIONS,
+    DEFAULT_DURATION_OPTIONS,
+    _SOFT_MASK,
+    _SHELL_ACCESS_IDX,
+    _CREDS_FOUND_IDX,
+)
 from rl.state import MAX_HOSTS, NUM_FEATURES
 
 
@@ -105,6 +113,17 @@ def test_shell_access_masks_connect_actions(policy, zero_state):
     probs = F.softmax(policy._masked_action_logits(action_input, host_slot=2, state=state), dim=-1)
     for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET):
         assert probs[int(a)].item() < 1e-6, f"{a.name} should be masked when shell_access=True"
+
+
+def test_creds_found_masks_brute_force_actions(policy, zero_state):
+    """BRUTE_FORCE_* must be near-zero for a host with creds_found=True."""
+    state = zero_state.clone()
+    state[0, _CREDS_FOUND_IDX] = 1.0  # slot 2 maps to row 0
+    hidden = policy.trunk(state.flatten())
+    action_input = policy._action_input(hidden, host_slot=2, state=state)
+    probs = F.softmax(policy._masked_action_logits(action_input, host_slot=2, state=state), dim=-1)
+    for a in (Action.BRUTE_FORCE_SSH, Action.BRUTE_FORCE_FTP, Action.BRUTE_FORCE_TELNET):
+        assert probs[int(a)].item() < 1e-6, f"{a.name} should be masked when creds_found=True"
 
 
 # --- log_prob validity ---

@@ -40,6 +40,16 @@ _SOFT_MASK = _build_soft_mask()
 _SHELL_ACCESS_IDX = FEATURE_INDEX["shell_access"]
 _CONNECT_ACTION_INDICES = [int(a) for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET)]
 
+# creds_found is one shared flag per host, not per-service — masking all three
+# BRUTE_FORCE_* actions off it is only correct because no current scenario target
+# exposes more than one crackable service per host (see sandbox/compose/scenario-*.yml).
+# If a future scenario adds a multi-service target, this needs per-service credential
+# features instead.
+_CREDS_FOUND_IDX = FEATURE_INDEX["creds_found"]
+_BRUTE_FORCE_ACTION_INDICES = [
+    int(a) for a in (Action.BRUTE_FORCE_SSH, Action.BRUTE_FORCE_FTP, Action.BRUTE_FORCE_TELNET)
+]
+
 
 class Policy(nn.Module):
     """
@@ -120,6 +130,8 @@ class Policy(nn.Module):
         soft_mask = _SOFT_MASK[host_slot].clone().to(logits.device)
         if host_slot >= 2 and state[host_slot - 2, _SHELL_ACCESS_IDX].bool():
             soft_mask[_CONNECT_ACTION_INDICES] = True
+        if host_slot >= 2 and state[host_slot - 2, _CREDS_FOUND_IDX].bool():
+            soft_mask[_BRUTE_FORCE_ACTION_INDICES] = True
         return logits.masked_fill(soft_mask, _SOFT_MASK_VALUE)
 
     def _duration_input(self, action_input: torch.Tensor, action_idx: int) -> torch.Tensor:

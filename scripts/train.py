@@ -88,7 +88,19 @@ policy = Policy(
     hidden_dim=raw.get("hidden_dim", 128),
     num_layers=raw.get("num_layers", 2),
     conditioned_action_head=raw.get("conditioned_action_head", False),
+    duration_options=raw.get("duration_options"),
 )
+
+# A duration block longer than context_window would lose visibility into its own
+# earlier tries mid-block (see ADR 011) — fail at startup rather than silently
+# wasting a training run.
+if env_config.context_window < max(policy.duration_options):
+    raise ValueError(
+        f"context_window ({env_config.context_window}) must be >= the largest "
+        f"duration_options value ({max(policy.duration_options)}), or a multi-try "
+        "block can be pruned out of its own context before it finishes. See ADR 011."
+    )
+
 optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
 
 resume_episode = 0
@@ -130,7 +142,8 @@ with open(results_dir / "run_metadata.json", "w") as f:
 logger.info("Run metadata written: commit=%s", metadata["git_commit"])
 
 _ACTION_COLS = [f"act_{a.name.lower()}" for a in Action]
-_CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "elapsed_s", "entropy"] + _ACTION_COLS
+_TRIES_COLS = [f"tries_{a.name.lower()}" for a in Action]
+_CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "elapsed_s", "entropy"] + _ACTION_COLS + _TRIES_COLS
 
 _csv_mode = "a" if (args.resume and (results_dir / "rewards.csv").exists()) else "w"
 _rewards_csv = open(results_dir / "rewards.csv", _csv_mode, newline="")
@@ -139,7 +152,7 @@ if _csv_mode == "w":
     _csv_writer.writeheader()
 _rewards_csv.flush()
 
-_STEPS_FIELDS = ["episode", "step", "action", "reward"]
+_STEPS_FIELDS = ["episode", "step", "action", "reward", "tries_used"]
 _steps_csv = open(results_dir / "steps.csv", _csv_mode, newline="")
 _steps_writer = csv.DictWriter(_steps_csv, fieldnames=_STEPS_FIELDS)
 if _csv_mode == "w":
@@ -177,6 +190,7 @@ print(f"Container:   {env_config.container_name}")
 print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
 print(f"Model:       {env_config.model}")
 print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
+print(f"Duration:    options={policy.duration_options}  context_window={env_config.context_window}")
 print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}  entropy_coeff={entropy_coeff}")
 print(f"Seeds:       python={seed_python}  torch={seed_torch}")
 print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
@@ -199,16 +213,20 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
     exploits: list[str] = []
     entropies: list[float] = []
     action_counts: Counter = Counter()
+    tries_counts: Counter = Counter()
 
     done = False
     while not done:
         known_host_count = len(env._state.known_hosts())
-        action, host_slot, log_prob, entropy = policy.sample(state, known_host_count)
+        action, host_slot, duration, log_prob, entropy = policy.sample(state, known_host_count)
 
         # host_slot 0 (no_host) and 1 (all_hosts) are broadcast — host_idx is ignored
         host_idx = max(0, host_slot - 2)
 
-        state, reward, done, info = env.step(action, host_idx)
+        # One block (up to `duration` consecutive tries of the same action/host) is
+        # one decision from the policy's perspective — it gets exactly one log_prob
+        # and one aggregated reward below, whatever its real try count turned out to be.
+        state, reward, done, info = env.step_block(action, host_idx, duration)
 
         skip = info.get("skip")
         if not skip:
@@ -216,11 +234,15 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
             rewards.append(reward)
             entropies.append(entropy.item())
             action_counts[action] += 1
+            tries_counts[action] += info["tries_used"]
             if info.get("exploit"):
                 exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 
         action_label = action.name if not skip else skip.upper()
-        _steps_writer.writerow({"episode": episode, "step": info["step"], "action": action_label, "reward": reward})
+        _steps_writer.writerow({
+            "episode": episode, "step": info["step"], "action": action_label,
+            "reward": reward, "tries_used": info["tries_used"],
+        })
 
     # Discounted returns
     returns = _compute_returns(rewards, gamma)
@@ -262,6 +284,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         "elapsed_s": round(ep_elapsed, 1),
         "entropy": round(mean_entropy, 4),
         **{f"act_{a.name.lower()}": action_counts.get(a, 0) for a in Action},
+        **{f"tries_{a.name.lower()}": tries_counts.get(a, 0) for a in Action},
     })
     _rewards_csv.flush()
     _steps_csv.flush()

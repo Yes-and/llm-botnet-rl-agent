@@ -186,3 +186,120 @@ def test_step_count_increments(env_mocks):
     assert env.step_count == 1
     env.step(Action.SCAN_NETWORK, 0)
     assert env.step_count == 2
+
+
+# ── step_block(): early exit ──────────────────────────────────────────────────
+
+def test_step_block_stops_early_on_exploit(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
+    mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
+
+    _, block_reward, _, info = env.step_block(Action.PROBE_REDIS, 0, max_tries=5)
+
+    assert info["tries_used"] == 1
+    assert mock_exec.execute.call_count == 1
+    assert block_reward == pytest.approx(9.9)
+    assert info["exploit"] is not None
+    assert info["exploit"].vulnerability == "redis_no_auth"
+
+
+def test_step_block_stops_early_on_creds_found(env_mocks):
+    """BRUTE_FORCE_SSH never emits an ExploitEvent — the block should stop as soon as
+    creds_found flips true, not run to max_tries."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
+    cmd = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
+    mock_llm.complete.side_effect = [cmd, cmd]
+    mock_exec.execute.side_effect = [
+        _res("1 of 1 target completed, 0 valid passwords found\n"),
+        _res("[22][ssh] host: 172.18.0.5   login: admin   password: admin123\n"),
+    ]
+
+    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=5)
+
+    assert info["tries_used"] == 2
+    assert mock_exec.execute.call_count == 2
+    assert env._state.get("172.18.0.5", "creds_found")
+    assert block_reward == pytest.approx(-0.2)  # two step penalties, no exploit reward
+    assert info["exploit"] is None
+
+
+def test_step_block_exhausts_when_no_progress(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
+    mock_llm.complete.return_value = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
+    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
+
+    # env_mocks' max_steps=3; use max_tries=2 so this test isn't confounded by hitting done.
+    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=2)
+
+    assert info["tries_used"] == 2
+    assert mock_exec.execute.call_count == 2
+    assert not env._state.get("172.18.0.5", "creds_found")
+    assert block_reward == pytest.approx(-0.2)
+
+
+# ── step_block(): skip handling ───────────────────────────────────────────────
+
+def test_step_block_skip_on_first_try_reports_block_skip(env_mocks):
+    """Matches step()'s existing single-try skip behaviour exactly — nothing executed,
+    whole block reported as skip so training excludes it."""
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.side_effect = ValueError("no tool call")
+
+    _, block_reward, _, info = env.step_block(Action.SCAN_NETWORK, 0, max_tries=5)
+
+    mock_exec.execute.assert_not_called()
+    assert info.get("skip") == "no_tool_call"
+    assert info["tries_used"] == 1
+    assert block_reward == pytest.approx(-0.1)
+
+
+def test_step_block_skip_after_real_tries_keeps_earned_reward(env_mocks):
+    """A skip on a later try should not erase the reward already earned, and the block
+    should NOT be reported as a top-level skip — real tries happened, so it should
+    still be trained on."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
+    real_cmd = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
+    mock_llm.complete.side_effect = [real_cmd, ValueError("no tool call")]
+    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
+
+    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=5)
+
+    assert info.get("skip") is None
+    assert info["tries_used"] == 2
+    assert mock_exec.execute.call_count == 1
+    assert block_reward == pytest.approx(-0.2)  # one real try + one skip, both -0.1
+
+
+# ── step_block(): step budget ─────────────────────────────────────────────────
+
+def test_step_block_charges_real_tries_against_step_budget(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
+    mock_llm.complete.return_value = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
+    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
+
+    assert env.step_count == 0
+    _, _, done, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=2)
+
+    assert env.step_count == 2  # both tries counted against the budget, not 1 per block
+    assert info["tries_used"] == 2
+    assert not done  # env_mocks' max_steps=3
+
+
+# ── step(): equivalence to step_block(..., max_tries=1) ───────────────────────
+
+def test_step_equals_step_block_of_one(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
+    mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
+
+    _, reward, _, info = env.step(Action.PROBE_REDIS, 0)
+
+    assert reward == pytest.approx(9.9)
+    assert info["tries_used"] == 1

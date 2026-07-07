@@ -33,6 +33,16 @@ _INITIAL_TASK = (
     "You will be given one specific task per step — focus only on that task."
 )
 
+# Per-action state feature that marks "this action's goal has been reached", for actions
+# that don't emit an ExploitEvent themselves. BRUTE_FORCE_* actions only find credentials
+# (rl/parser.py's _parse_hydra never sets an exploit); the actual exploitation event
+# happens later via CONNECT_*. Used by step_block() to end a multi-try block early.
+_PROGRESS_FEATURE: dict[Action, str] = {
+    Action.BRUTE_FORCE_SSH: "creds_found",
+    Action.BRUTE_FORCE_FTP: "creds_found",
+    Action.BRUTE_FORCE_TELNET: "creds_found",
+}
+
 
 @dataclass
 class EnvironmentConfig:
@@ -103,13 +113,35 @@ class Environment:
         self, action: Action, host_idx: int
     ) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
         """
-        Execute one RL step.
+        Execute one RL step — a block of exactly one try. See step_block() for the
+        multi-try version driven by the policy's duration head.
 
         action   — the Action enum value chosen by the policy
         host_idx — index into state.known_hosts() (ignored for broadcast actions)
 
         Returns (obs, reward, done, info).
-        info keys: step, action, host, command, exit_code, exploit, truncated
+        info keys: step, action, host, command, exit_code, exploit, truncated, tries_used
+        """
+        return self.step_block(action, host_idx, max_tries=1)
+
+    def step_block(
+        self, action: Action, host_idx: int, max_tries: int = 1
+    ) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
+        """
+        Execute up to max_tries consecutive primitive commands against the same
+        (action, host), stopping early once that action's goal is met:
+
+        - BRUTE_FORCE_SSH/FTP/TELNET never emit an ExploitEvent themselves (see
+          docs/features/rl-parser.md) — their goal is creds_found becoming true.
+        - Every other action's goal is its ExploitEvent firing.
+
+        A skip on the first try (LLM error, invalid host) ends the block exactly like
+        a single step() skip today, contributing nothing to training. A skip on a later
+        try keeps whatever real reward was already earned and ends the block there.
+
+        Returns (obs, block_reward, done, info), where block_reward is the sum of the
+        rewards from however many tries actually ran, and info carries the same keys
+        as a single try's info plus "tries_used".
         """
         ip = self._resolve_host(action, host_idx)
         if ip is None and action not in BROADCAST_ACTIONS:
@@ -125,8 +157,51 @@ class Environment:
             return self._state.to_tensor(), reward, done, {
                 "step": self._step_count,
                 "skip": "invalid_host_idx",
+                "tries_used": 1,
             }
 
+        progress_feature = _PROGRESS_FEATURE.get(action)
+        block_reward = 0.0
+        last_real_info: dict[str, Any] = {}
+        done = False
+
+        def _log_block_summary(tries_used: int, skip: str | None = None) -> None:
+            suffix = f"  skip={skip}" if skip else ""
+            logger.info(
+                "  └─ block: %-20s tries=%d/%d  block_reward=%+.1f%s",
+                action.name, tries_used, max_tries, block_reward, suffix,
+            )
+
+        for tries_used in range(1, max_tries + 1):
+            reward, info = self._try_once(action, ip)
+            block_reward += reward
+            done = self._step_count >= self.config.max_steps
+
+            if info.get("skip"):
+                if tries_used == 1:
+                    # Whole block failed to execute at all — report as a plain skip,
+                    # matching step()'s single-try behaviour exactly (excluded from training).
+                    _log_block_summary(tries_used, skip=info["skip"])
+                    return self._state.to_tensor(), block_reward, done, {**info, "tries_used": tries_used}
+                # Later skip: keep the reward already earned, but don't propagate the
+                # "skip" key — real tries happened, so this block *should* still be
+                # trained on. Report the last real try's info instead.
+                _log_block_summary(tries_used, skip=info["skip"])
+                return self._state.to_tensor(), block_reward, done, {**last_real_info, "tries_used": tries_used}
+
+            last_real_info = info
+            if info.get("exploit") is not None:
+                break
+            if progress_feature is not None and ip is not None and self._state.get(ip, progress_feature):
+                break
+            if done:
+                break
+
+        _log_block_summary(tries_used)
+        return self._state.to_tensor(), block_reward, done, {**last_real_info, "tries_used": tries_used}
+
+    def _try_once(self, action: Action, ip: str | None) -> tuple[float, dict[str, Any]]:
+        """Execute a single primitive command for (action, ip). Returns (reward, info)."""
         instruction = _action_to_instruction(action, ip)
         self._messages.append({"role": "user", "content": instruction})
 
@@ -137,32 +212,24 @@ class Environment:
             logger.warning("LLM call failed, skipping step: %s", exc)
             reward = self._reward_calc.step()
             self._step_count += 1
-            done = self._step_count >= self.config.max_steps
             skip = "api_timeout" if isinstance(exc, openai.APITimeoutError) else "no_tool_call"
             logger.info(
                 "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=%s",
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward, skip,
             )
-            return self._state.to_tensor(), reward, done, {
-                "step": self._step_count,
-                "skip": skip,
-            }
+            return reward, {"step": self._step_count, "skip": skip}
         except Exception as exc:
             self._messages.pop()
             logger.exception("Unexpected error in step(), skipping: %s", exc)
             reward = self._reward_calc.step()
             self._step_count += 1
-            done = self._step_count >= self.config.max_steps
             logger.info(
                 "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=unexpected_error",
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
-            return self._state.to_tensor(), reward, done, {
-                "step": self._step_count,
-                "skip": "unexpected_error",
-            }
+            return reward, {"step": self._step_count, "skip": "unexpected_error"}
 
         self._messages.append(request.assistant_message)
 
@@ -193,7 +260,6 @@ class Environment:
         exploit = None if (parsed.exploit is None or already_exploited) else parsed.exploit
         reward = self._reward_calc.step(exploit)
         self._step_count += 1
-        done = self._step_count >= self.config.max_steps
 
         info: dict[str, Any] = {
             "step": self._step_count,
@@ -211,7 +277,7 @@ class Environment:
             action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             f"  exploit={exploit.vulnerability}" if exploit else "",
         )
-        return self._state.to_tensor(), reward, done, info
+        return reward, info
 
     @property
     def step_count(self) -> int:

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from rl.actions import Action, BROADCAST_ACTIONS
@@ -7,6 +8,12 @@ from rl.state import FEATURE_INDEX, MAX_HOSTS, NUM_FEATURES
 
 NUM_ACTIONS = len(Action)
 NUM_HOST_SLOTS = MAX_HOSTS + 2  # slot 0: no_host, slot 1: all_hosts, slots 2..: discovered hosts
+
+# How many consecutive tries the duration head may commit to for one (host, action)
+# selection. Kept small and discrete rather than a continuous output — easier to train
+# reliably. Must not exceed the environment's context_window (see ADR 011): a block
+# longer than the conversation window would lose visibility into its own earlier tries.
+DEFAULT_DURATION_OPTIONS: tuple[int, ...] = (1, 2, 3, 5)
 
 _SOFT_MASK_VALUE = -1e9
 
@@ -51,6 +58,11 @@ class Policy(nn.Module):
     to the trunk output before the action head, enabling per-host action preferences.
     This allows the policy to learn to skip a host whose tried_* features indicate prior
     failure, rather than learning only global action preferences.
+
+    Duration head: softmax over duration_options (default (1, 2, 3, 5)), conditioned on
+    the same input the action head received plus a one-hot of the sampled action — so the
+    policy can learn different try-budgets per action (e.g. 1 for PROBE_REDIS, 5 for
+    BRUTE_FORCE_SSH) rather than one global value. See ADR 011.
     """
 
     def __init__(
@@ -58,9 +70,11 @@ class Policy(nn.Module):
         hidden_dim: int = 128,
         num_layers: int = 2,
         conditioned_action_head: bool = False,
+        duration_options: tuple[int, ...] | None = None,
     ):
         super().__init__()
         self._conditioned = conditioned_action_head
+        self.duration_options = tuple(duration_options) if duration_options else DEFAULT_DURATION_OPTIONS
 
         layers: list[nn.Module] = []
         in_dim = MAX_HOSTS * NUM_FEATURES
@@ -72,6 +86,7 @@ class Policy(nn.Module):
         self.host_head = nn.Linear(hidden_dim, NUM_HOST_SLOTS)
         action_in_dim = hidden_dim + (NUM_FEATURES if conditioned_action_head else 0)
         self.action_head = nn.Linear(action_in_dim, NUM_ACTIONS)
+        self.duration_head = nn.Linear(action_in_dim + NUM_ACTIONS, len(self.duration_options))
 
     def _masked_host_logits(self, hidden: torch.Tensor, known_host_count: int) -> torch.Tensor:
         logits = self.host_head(hidden)
@@ -107,14 +122,20 @@ class Policy(nn.Module):
             soft_mask[_CONNECT_ACTION_INDICES] = True
         return logits.masked_fill(soft_mask, _SOFT_MASK_VALUE)
 
+    def _duration_input(self, action_input: torch.Tensor, action_idx: int) -> torch.Tensor:
+        """Return the input vector for the duration head: action_input plus a one-hot of
+        the sampled action, so the try-budget can depend on which action was picked."""
+        action_one_hot = F.one_hot(torch.tensor(action_idx, device=action_input.device), NUM_ACTIONS).float()
+        return torch.cat([action_input, action_one_hot])
+
     def sample(
         self, state: torch.Tensor, known_host_count: int
-    ) -> tuple[Action, int, torch.Tensor, torch.Tensor]:
-        """Sample (action, host_slot, log_prob, entropy) for use in the REINFORCE training loop.
+    ) -> tuple[Action, int, int, torch.Tensor, torch.Tensor]:
+        """Sample (action, host_slot, duration, log_prob, entropy) for the REINFORCE training loop.
 
-        log_prob = log p(host | state) + log p(action | host, state)
+        log_prob = log p(host | state) + log p(action | host, state) + log p(duration | host, action, state)
 
-        Entropy is the sum of host and action head entropies — a proxy for overall policy
+        Entropy is the sum of all three heads' entropies — a proxy for overall policy
         uncertainty. Collapse toward zero signals the policy has stopped exploring.
         """
         hidden = self.trunk(state.flatten())
@@ -129,15 +150,28 @@ class Policy(nn.Module):
         action_dist = Categorical(logits=action_logits)
         action_idx = action_dist.sample()
 
-        log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action_idx)
-        entropy = host_dist.entropy() + action_dist.entropy()
-        return Action(action_idx.item()), host_slot_int, log_prob, entropy
+        duration_input = self._duration_input(action_input, action_idx.item())
+        duration_logits = self.duration_head(duration_input)
+        duration_dist = Categorical(logits=duration_logits)
+        duration_idx = duration_dist.sample()
+        duration = self.duration_options[duration_idx.item()]
 
-    def predict(self, state: torch.Tensor, known_host_count: int) -> tuple[Action, int]:
+        log_prob = (
+            host_dist.log_prob(host_slot)
+            + action_dist.log_prob(action_idx)
+            + duration_dist.log_prob(duration_idx)
+        )
+        entropy = host_dist.entropy() + action_dist.entropy() + duration_dist.entropy()
+        return Action(action_idx.item()), host_slot_int, duration, log_prob, entropy
+
+    def predict(self, state: torch.Tensor, known_host_count: int) -> tuple[Action, int, int]:
         """Argmax selection for evaluation; no gradient computation."""
         with torch.no_grad():
             hidden = self.trunk(state.flatten())
             host_slot = self._masked_host_logits(hidden, known_host_count).argmax().item()
             action_input = self._action_input(hidden, host_slot, state)
             action_idx = self._masked_action_logits(action_input, host_slot, state).argmax().item()
-        return Action(action_idx), host_slot
+            duration_input = self._duration_input(action_input, action_idx)
+            duration_idx = self.duration_head(duration_input).argmax().item()
+            duration = self.duration_options[duration_idx]
+        return Action(action_idx), host_slot, duration

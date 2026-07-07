@@ -1,9 +1,10 @@
 import torch
 import torch.nn.functional as F
 import pytest
+from torch.distributions import Categorical
 
 from rl.actions import Action, BROADCAST_ACTIONS
-from rl.policy import Policy, NUM_HOST_SLOTS, NUM_ACTIONS, _SOFT_MASK, _SHELL_ACCESS_IDX
+from rl.policy import Policy, NUM_HOST_SLOTS, NUM_ACTIONS, DEFAULT_DURATION_OPTIONS, _SOFT_MASK, _SHELL_ACCESS_IDX
 from rl.state import MAX_HOSTS, NUM_FEATURES
 
 
@@ -27,9 +28,11 @@ def zero_state():
 # --- Return types ---
 
 def test_sample_return_types(policy, zero_state):
-    action, host_slot, log_prob, entropy = policy.sample(zero_state, known_host_count=2)
+    action, host_slot, duration, log_prob, entropy = policy.sample(zero_state, known_host_count=2)
     assert isinstance(action, Action)
     assert isinstance(host_slot, int)
+    assert isinstance(duration, int)
+    assert duration in policy.duration_options
     assert isinstance(log_prob, torch.Tensor)
     assert log_prob.shape == ()
     assert isinstance(entropy, torch.Tensor)
@@ -37,9 +40,11 @@ def test_sample_return_types(policy, zero_state):
 
 
 def test_predict_return_types(policy, zero_state):
-    action, host_slot = policy.predict(zero_state, known_host_count=2)
+    action, host_slot, duration = policy.predict(zero_state, known_host_count=2)
     assert isinstance(action, Action)
     assert isinstance(host_slot, int)
+    assert isinstance(duration, int)
+    assert duration in policy.duration_options
 
 
 # --- Hard masking ---
@@ -105,12 +110,12 @@ def test_shell_access_masks_connect_actions(policy, zero_state):
 # --- log_prob validity ---
 
 def test_log_prob_is_scalar(policy, zero_state):
-    _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
+    _, _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
     assert log_prob.ndim == 0
 
 
 def test_log_prob_is_negative(policy, zero_state):
-    _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
+    _, _, _, log_prob, _ = policy.sample(zero_state, known_host_count=3)
     assert log_prob.item() < 0.0
 
 
@@ -125,7 +130,7 @@ def test_predict_is_deterministic(policy, zero_state):
 def test_sample_host_slot_in_range(policy, zero_state):
     known_host_count = 3
     for _ in range(20):
-        _, host_slot, _, _ = policy.sample(zero_state, known_host_count=known_host_count)
+        _, host_slot, _, _, _ = policy.sample(zero_state, known_host_count=known_host_count)
         assert 0 <= host_slot < 2 + known_host_count
 
 
@@ -175,8 +180,79 @@ def test_conditioned_action_logits_vary_by_host(conditioned_policy):
 
 def test_conditioned_sample_returns_valid_types(conditioned_policy):
     state = torch.rand(MAX_HOSTS, NUM_FEATURES)
-    action, host_slot, log_prob, entropy = conditioned_policy.sample(state, known_host_count=4)
+    action, host_slot, duration, log_prob, entropy = conditioned_policy.sample(state, known_host_count=4)
     assert isinstance(action, Action)
     assert isinstance(host_slot, int)
+    assert duration in conditioned_policy.duration_options
     assert log_prob.ndim == 0
     assert log_prob.item() < 0.0
+
+
+# --- Duration head ---
+
+def test_duration_head_dimensions(policy):
+    """Duration head input = action head input dim + one-hot(action); output = menu size."""
+    expected_in = policy.action_head.in_features + NUM_ACTIONS
+    assert policy.duration_head.in_features == expected_in
+    assert policy.duration_head.out_features == len(DEFAULT_DURATION_OPTIONS)
+
+
+def test_default_duration_options(policy):
+    assert policy.duration_options == DEFAULT_DURATION_OPTIONS
+
+
+def test_custom_duration_options():
+    torch.manual_seed(0)
+    custom = Policy(hidden_dim=64, num_layers=2, duration_options=(1, 4))
+    assert custom.duration_options == (1, 4)
+    assert custom.duration_head.out_features == 2
+    for _ in range(20):
+        _, _, duration, _, _ = custom.sample(torch.zeros(MAX_HOSTS, NUM_FEATURES), known_host_count=2)
+        assert duration in (1, 4)
+
+
+def test_predict_duration_is_deterministic(policy, zero_state):
+    assert policy.predict(zero_state, known_host_count=3) == policy.predict(zero_state, known_host_count=3)
+
+
+def test_duration_logits_vary_by_action(policy):
+    """Duration head input includes a one-hot of the sampled action, so logits should differ per action."""
+    state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    hidden = policy.trunk(state.flatten())
+    action_input = policy._action_input(hidden, host_slot=2, state=state)
+    logits_for_action_0 = policy.duration_head(policy._duration_input(action_input, action_idx=0))
+    logits_for_action_1 = policy.duration_head(policy._duration_input(action_input, action_idx=1))
+    assert not torch.allclose(logits_for_action_0, logits_for_action_1)
+
+
+def test_sample_log_prob_and_entropy_include_duration_term(policy, zero_state):
+    """log_prob/entropy from sample() should exactly equal the manually composed
+    host + action + duration terms — i.e. duration is really folded in, not dropped."""
+    torch.manual_seed(7)
+    action, host_slot, duration, log_prob, entropy = policy.sample(zero_state, known_host_count=3)
+
+    torch.manual_seed(7)
+    hidden = policy.trunk(zero_state.flatten())
+    host_dist = Categorical(logits=policy._masked_host_logits(hidden, known_host_count=3))
+    sampled_host = host_dist.sample()
+
+    action_input = policy._action_input(hidden, sampled_host.item(), zero_state)
+    action_dist = Categorical(logits=policy._masked_action_logits(action_input, sampled_host.item(), zero_state))
+    sampled_action = action_dist.sample()
+
+    duration_input = policy._duration_input(action_input, sampled_action.item())
+    duration_dist = Categorical(logits=policy.duration_head(duration_input))
+    sampled_duration_idx = duration_dist.sample()
+
+    expected_log_prob = (
+        host_dist.log_prob(sampled_host)
+        + action_dist.log_prob(sampled_action)
+        + duration_dist.log_prob(sampled_duration_idx)
+    )
+    expected_entropy = host_dist.entropy() + action_dist.entropy() + duration_dist.entropy()
+
+    assert torch.allclose(log_prob, expected_log_prob)
+    assert torch.allclose(entropy, expected_entropy)
+    assert action == Action(sampled_action.item())
+    assert host_slot == sampled_host.item()
+    assert duration == policy.duration_options[sampled_duration_idx.item()]

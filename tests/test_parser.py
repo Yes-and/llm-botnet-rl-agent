@@ -164,12 +164,20 @@ def test_hydra(command, exit_code, output, expected_updates):
 
 REDIS_CASES = [
     pytest.param(
-        # INFO output (step 7)
+        # INFO with pipe (step 7)
         "redis-cli -h 172.18.0.5 INFO | head -20",
         0,
         "# Server\nredis_version:8.8.0\ntcp_port:6379\n",
         "172.18.0.5", True, "redis_no_auth",
         id="redis-info-success",
+    ),
+    pytest.param(
+        # bare INFO — exact pattern observed in real training runs
+        "redis-cli -h 172.21.0.2 INFO",
+        0,
+        "# Server\nredis_version:7.2.1\nredis_git_sha1:00000000\ntcp_port:6379\n",
+        "172.21.0.2", True, "redis_no_auth",
+        id="redis-info-bare-success",
     ),
     pytest.param(
         # KEYS '*' returns empty — no redis_version: in output, not an exploit indicator
@@ -246,6 +254,14 @@ MONGO_CASES = [
         "Collections: ['system.version']\n",
         "172.18.0.2", True, "mongodb_no_auth",
         id="mongo-list-collections-success",
+    ),
+    pytest.param(
+        # URI format — exact pattern observed in real training runs
+        "python3 -c \"from pymongo import MongoClient; client = MongoClient('mongodb://172.21.0.5:27017/'); print(client.list_database_names())\"",
+        0,
+        "['admin', 'config', 'local']\n",
+        "172.21.0.5", True, "mongodb_no_auth",
+        id="mongo-uri-format-success",
     ),
     pytest.param(
         # connection timeout

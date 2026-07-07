@@ -62,8 +62,8 @@ _HYDRA_CRED = re.compile(
 # redis-cli -h <ip>
 _REDIS_HOST = re.compile(r"redis-cli\s+.*?-h\s+([\d.]+)")
 
-# MongoClient('<ip>', ...) or MongoClient("<ip>", ...)
-_MONGO_HOST = re.compile(r"MongoClient\(['\"]?([\d.]+)")
+# MongoClient('<ip>', ...) or MongoClient('mongodb://<ip>:port/')
+_MONGO_HOST = re.compile(r"MongoClient\(['\"]?(?:mongodb://)?([\d.]+)")
 
 # FTP('<ip>', ...) — python3 ftplib
 _FTP_PYLIB_HOST = re.compile(r"FTP\(['\"]?([\d.]+)")

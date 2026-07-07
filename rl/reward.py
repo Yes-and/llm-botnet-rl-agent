@@ -26,7 +26,3 @@ class RewardCalculator:
 
     def reset(self) -> None:
         self.exploit_counts.clear()
-
-    def farming_detected(self) -> bool:
-        """True if any (host, vulnerability) pair has been exploited more than once."""
-        return any(count > 1 for count in self.exploit_counts.values())

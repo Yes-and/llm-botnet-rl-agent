@@ -27,7 +27,7 @@ import yaml
 from dotenv import load_dotenv
 
 from rl.actions import Action
-from rl.environment import Environment, EnvironmentConfig
+from rl.environment import DEFAULT_CONTEXT_WINDOW, Environment, EnvironmentConfig
 from rl.logging_setup import setup_logging
 from rl.policy import Policy
 
@@ -78,7 +78,7 @@ env_config = EnvironmentConfig(
     timeout=raw.get("timeout", 60),
     max_output_chars=raw.get("max_output_chars", 4000),
     model=raw.get("model", "moonshotai/Kimi-K2.6"),
-    context_window=raw.get("context_window", 3),
+    context_window=raw.get("context_window", DEFAULT_CONTEXT_WINDOW),
     api_timeout=raw.get("api_timeout", 60),
     reasoning_effort=raw.get("reasoning_effort", None),
 )

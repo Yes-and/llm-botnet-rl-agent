@@ -43,6 +43,10 @@ _PROGRESS_FEATURE: dict[Action, str] = {
     Action.BRUTE_FORCE_TELNET: "creds_found",
 }
 
+# Single source of truth for the default context_window — scripts/train.py imports this
+# rather than hardcoding its own number, so the two can't silently drift apart.
+DEFAULT_CONTEXT_WINDOW = 3
+
 
 @dataclass
 class EnvironmentConfig:
@@ -52,7 +56,7 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
-    context_window: int = 10
+    context_window: int = DEFAULT_CONTEXT_WINDOW
     api_timeout: int = 60
     reasoning_effort: str | None = None  # e.g. "none" to disable thinking on Qwen models
 

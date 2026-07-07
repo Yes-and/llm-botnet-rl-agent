@@ -1,6 +1,6 @@
 # ADR 010: Conditioned Action Head — Triage-Aware Policy Architecture
 
-**Status:** Accepted
+**Status:** Accepted; partially superseded by ADR 011
 
 **Supersedes:** action head parallelism decision in ADR 007.
 

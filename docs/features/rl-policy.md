@@ -4,9 +4,9 @@
 
 ## Overview
 
-`rl/policy.py` implements the policy network used during REINFORCE training. It maps the current episode state tensor to a distribution over `(host, action)` pairs, from which the training loop samples to produce the instruction injected into the LLM prompt.
+`rl/policy.py` implements the policy network used during REINFORCE training. It maps the current episode state tensor to a distribution over `(host, action, duration)` triples, from which the training loop samples to produce the instruction injected into the LLM prompt and the number of consecutive tries to give it.
 
-See ADR 007 for the original design rationale and ADR 010 for the conditioned action head extension.
+See ADR 007 for the original design rationale, ADR 010 for the conditioned action head extension, and ADR 011 for the duration head.
 
 ## Architecture
 
@@ -18,9 +18,11 @@ state [MAX_HOSTS, NUM_FEATURES]
     → action head: softmax over [NUM_ACTIONS]
           parallel mode:   input = hidden
           conditioned mode: input = concat(hidden, state[host_slot])
+    → duration head: softmax over duration_options (default (1, 2, 3, 5))
+          input = concat(action_input, one_hot(action))
 ```
 
-The `conditioned_action_head` config flag (default `false`) switches between the two modes.
+The `conditioned_action_head` config flag (default `false`) switches between the two action-head modes.
 
 ## Host Head
 
@@ -56,9 +58,17 @@ log π(host, action | state) = log π_host(host | state) + log π_action(action 
 
 This enables per-host action preferences — e.g. suppressing `PROBE_REDIS` on a host where `tried_probe_redis=1` and `shell_access=0`. Broadcast slots (`no_host`, `all_hosts`) receive a zero vector in place of host features.
 
+## Duration Head
+
+Outputs a distribution over a small fixed menu of try-counts, `duration_options` (default `(1, 2, 3, 5)`, config-driven like `conditioned_action_head`). Its input is `action_input` — the same vector the action head used, so it inherits host-conditioning when enabled — concatenated with a one-hot of the sampled action. This lets the policy learn *different* try-budgets per action (e.g. `duration≈1` for `PROBE_REDIS`, which succeeds in one command, versus a larger value for `BRUTE_FORCE_SSH`, which needs room for a recon → brute-force → connect chain) rather than one global value.
+
+Conditioning on the action (not just the trunk) is deliberate: an unconditioned duration head would reproduce the exact failure mode ADR 010 fixed for the action head — learning "duration=5 is globally good" and misapplying it to trivial one-shot actions. See ADR 011.
+
+The sampled `duration` is passed to `Environment.step_block()`, which executes up to that many consecutive primitive commands against the same `(host, action)`, stopping early once that action's goal is met (see `docs/features/rl-parser.md` for per-action success signals).
+
 ## Sampling
 
-At training time, both heads sample from their distributions to maintain exploration:
+At training time, all three heads sample from their distributions to maintain exploration:
 
 ```python
 host_dist = Categorical(host_logits_masked)
@@ -68,26 +78,32 @@ action_input = concat(hidden, state[host_slot]) if conditioned else hidden
 action_dist = Categorical(action_logits_masked(action_input, host_slot))
 action = action_dist.sample()
 
-log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action)
-entropy  = host_dist.entropy() + action_dist.entropy()
+duration_input = concat(action_input, one_hot(action))
+duration_dist = Categorical(duration_head(duration_input))
+duration = duration_options[duration_dist.sample()]
+
+log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action) + duration_dist.log_prob(duration_idx)
+entropy  = host_dist.entropy() + action_dist.entropy() + duration_dist.entropy()
 ```
 
-At evaluation time, argmax is used for both heads via `policy.predict()`.
+At evaluation time, argmax is used for all three heads via `policy.predict()`.
 
 ## Interface
 
 ```python
-policy = Policy(hidden_dim=128, num_layers=1, conditioned_action_head=False)
+policy = Policy(hidden_dim=128, num_layers=1, conditioned_action_head=False, duration_options=(1, 2, 3, 5))
 
-action, host_slot, log_prob, entropy = policy.sample(state_tensor, known_host_count)
-action, host_slot                    = policy.predict(state_tensor, known_host_count)
+action, host_slot, duration, log_prob, entropy = policy.sample(state_tensor, known_host_count)
+action, host_slot, duration                    = policy.predict(state_tensor, known_host_count)
 ```
 
 ## Files
 
 - `rl/policy.py` — implementation
-- `tests/test_policy.py` — unit tests (shapes, masking, log-prob, determinism, conditioned mode)
+- `tests/test_policy.py` — unit tests (shapes, masking, log-prob, determinism, conditioned mode, duration head)
 - `docs/adr/007-rl-algorithm-and-policy-design.md` — original design decisions
 - `docs/adr/010-conditioned-action-head.md` — conditioned action head rationale
+- `docs/adr/011-action-duration-head.md` — duration head rationale and multi-try block semantics
 - `rl/actions.py` — action enum
 - `rl/state.py` — state tensor structure
+- `rl/environment.py` — `step_block()`, which executes the sampled duration

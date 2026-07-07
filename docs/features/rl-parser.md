@@ -54,9 +54,11 @@ Detects the standard credential-found line:
 ```
 Sets `creds_found` and the relevant `service_*` feature. Does not emit an `ExploitEvent` — shell access (not credential discovery) is the exploitation event.
 
+`creds_found` doubles as the early-exit signal for `Environment.step_block()` on `BRUTE_FORCE_SSH`/`FTP`/`TELNET` (see ADR 011): since these actions never emit an `ExploitEvent`, a multi-try block would otherwise run to its full duration even after credentials were already found.
+
 ## redis-cli
 
-Exit code 0 + output not starting with `ERR`/`WRONGTYPE`/`NOAUTH`/`DENIED` → `shell_access` + `ExploitEvent("redis_no_auth")`. Empty output (empty database) is treated as success.
+Exit code 0 + `redis_version:` present in output → `shell_access` + `ExploitEvent("redis_no_auth")`. The `redis_version:` marker only appears in a successful `INFO` response from an unauthenticated server — an auth-required server returns `NOAUTH Authentication required.` instead, and connectivity-only commands like `PING` (`PONG`) don't prove auth bypass. `KEYS`/`CONFIG GET` output alone is not treated as exploitation for the same reason.
 
 ## pymongo
 
@@ -64,15 +66,17 @@ Exit code 0 + no `Traceback`/`ServerSelectionTimeoutError` → `shell_access` + 
 
 ## FTP
 
-Two sub-parsers handle the python3 ftplib and ftp binary cases separately. Exit code 0 + no `Traceback` → `shell_access` + `ExploitEvent("ftp_anonymous_login")`.
+Two sub-parsers handle the python3 ftplib and ftp binary cases separately, since each fails differently on unsuccessful login:
+- **ftplib** (`_parse_ftp_pylib`): exit code 0 + no `Traceback` → `shell_access` + `ExploitEvent("ftp_anonymous_login")`. ftplib raises on connection/login failure (`ConnectionRefusedError`, `error_perm`), which shows up as a Traceback; it doesn't print the `230` response to stdout, so that can't be checked directly.
+- **ftp binary** (`_parse_ftp_bin`): exit code 0 + `230` present in output → `shell_access` + `ExploitEvent("ftp_anonymous_login")`. The binary exits 0 even on a refused/failed login, so the exit code alone can't be trusted — the `230` success response is required.
 
 ## telnetlib
 
-Exit code 0 + `login:` in output → sets `service_telnet`, `port_23_open`, `is_alive` for the target IP (extracted from `Telnet('ip', ...)` in the command). No `ExploitEvent` — reading the login prompt is reconnaissance, not exploitation.
+Exit code 0 + `login:` in output → sets `service_telnet`, `port_23_open`, `is_alive` for the target IP (extracted from `Telnet('ip', ...)` in the command). Reading the login prompt alone is reconnaissance, not exploitation — no `ExploitEvent` yet. If `uid=` is also present (the agent ran a shell command after logging in) → additionally sets `shell_access` + `ExploitEvent("telnet_weak_credentials")`.
 
 ## SSH
 
-Exit code 0 + `uid=` in output + no `Permission denied`/`Connection refused` → `shell_access` + `ExploitEvent("ssh_weak_credentials")`. Requires the agent to run a non-interactive command (e.g., `'id'`) to confirm shell access.
+Exit code 0 + `uid=` in output + no `Permission denied`/`Connection refused` → `shell_access` + `creds_found` + `ExploitEvent("ssh_weak_credentials")`. Requires the agent to run a non-interactive command (e.g., `'id'`) to confirm shell access.
 
 ## Extending the Parser
 

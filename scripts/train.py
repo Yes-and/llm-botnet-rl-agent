@@ -106,6 +106,7 @@ gamma = raw.get("gamma", 0.99)
 use_baseline = raw.get("use_baseline", True)
 save_every = raw.get("save_every", 10)
 grad_clip = raw.get("grad_clip", 1.0)
+entropy_coeff = raw.get("entropy_coeff", 0.0)
 
 # ── Tracking setup ────────────────────────────────────────────────────────────
 
@@ -176,7 +177,7 @@ print(f"Container:   {env_config.container_name}")
 print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
 print(f"Model:       {env_config.model}")
 print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
-print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}")
+print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}  entropy_coeff={entropy_coeff}")
 print(f"Seeds:       python={seed_python}  torch={seed_torch}")
 print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
 print(f"Results:     {results_dir}")
@@ -227,7 +228,8 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         returns = returns - returns.mean()
 
     # Policy gradient update
-    loss = -(torch.stack(log_probs) * returns).sum()
+    entropy_bonus = torch.tensor(entropies).sum() if entropy_coeff > 0.0 else torch.tensor(0.0)
+    loss = -(torch.stack(log_probs) * returns).sum() - entropy_coeff * entropy_bonus
     optimizer.zero_grad()
     loss.backward()
     torch.nn.utils.clip_grad_norm_(policy.parameters(), max_norm=grad_clip)

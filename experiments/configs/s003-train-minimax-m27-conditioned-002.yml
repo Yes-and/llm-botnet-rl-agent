@@ -1,0 +1,55 @@
+# REINFORCE training run — scenario-003 (mixed-target: 5 exploitable, 5 hardened, 2 dead)
+# Model: MiniMaxAI/MiniMax-M2.7, conditioned action head + duration head
+# Changes from -001: entropy stayed ~flat (5.86->5.76) over all 30 episodes — only 30 total
+# gradient steps (one optimizer.step() per episode), possibly too few/too small to move the
+# policy at all. Precedent in this codebase: Kimi K2.6 (s002-train-kimi-k26-001) needed
+# learning_rate raised from 0.001 to 0.01 mid-run to get a stable trend, i.e. "too low" has
+# already happened here before. Response:
+#   - num_episodes 30->80: more gradient steps before judging convergence
+#   - learning_rate 0.001->0.003: raise, not lower — following the Kimi K2.6 precedent
+#     above, smaller jump than Kimi's 0.01 since M2.7's reward dynamics may differ
+#   - grad_clip: left at 1.0 (unchanged from -001) — deliberately isolating learning_rate
+#     as the only other change alongside num_episodes, so if this run's behaviour differs
+#     from -001 we can attribute it to a single variable
+# (Originally drafted with learning_rate 0.0005 + grad_clip 0.5 on the theory that loss
+# swinging -65..+61 across episodes meant steps were too noisy/large. Revised: grad_clip
+# already caps the update norm before the optimizer step, so that loss volatility mostly
+# reflects episode-to-episode reward variance, not step size — a weaker argument for
+# lowering learning_rate than it first looked.)
+# This is a FRESH run (no --resume) — resuming would silently keep -001's optimizer
+# state, including its learning_rate, ignoring the value below. train.py doesn't
+# currently re-apply a resume config's learning_rate after loading checkpoint optimizer
+# state; noted for later, not fixed here.
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 0
+seed_torch: 0
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 80
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: true
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

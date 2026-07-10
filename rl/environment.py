@@ -191,7 +191,11 @@ class Environment:
                 # "skip" key — real tries happened, so this block *should* still be
                 # trained on. Report the last real try's info instead.
                 _log_block_summary(tries_used, skip=info["skip"])
-                return self._state.to_tensor(), block_reward, done, {**last_real_info, "tries_used": tries_used}
+                # last_real_info["step"] is stale — it's from the try before this one, but
+                # self._step_count already advanced past the skipped try too.
+                return self._state.to_tensor(), block_reward, done, {
+                    **last_real_info, "step": self._step_count, "tries_used": tries_used,
+                }
 
             last_real_info = info
             if info.get("exploit") is not None:

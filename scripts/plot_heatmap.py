@@ -71,6 +71,11 @@ def _cat_idx(cat: str) -> int:
 _STEP_RE  = re.compile(r"\[Step\s+(\d+)/\d+\] (\w+).*reward=([+-]?\d+\.?\d*)")
 _RESET_RE = re.compile(r"=== Episode reset ===")
 
+# Blocks that failed on their first try (train.py's `if not skip`) never get a log_prob
+# or reward entry in the actual REINFORCE trajectory — exclude them here too so G_t
+# matches what the policy gradient actually saw, not steps.csv's full row list.
+_SKIP_LABELS = {"API_TIMEOUT", "NO_TOOL_CALL", "INVALID_HOST_IDX", "UNEXPECTED_ERROR"}
+
 
 def _parse_log(log_path: Path) -> pd.DataFrame:
     rows: list[dict] = []
@@ -146,11 +151,16 @@ def _plot_step(results_dir: Path, out: Path, reward_overlay: bool = True) -> Non
     num_episodes = int(df["episode"].max())
     num_steps    = int(df["step"].max())
 
+    # A steps.csv row is written once per block (ADR 011: duration head), logged at the
+    # block's final step — tries_used earlier steps in the same block have no row of their
+    # own. Backfill them with the block's action so the heatmap shows the whole block.
+    tries = df["tries_used"] if "tries_used" in df.columns else pd.Series(1, index=df.index)
     matrix = np.full((num_episodes, num_steps), -1, dtype=float)
-    matrix[
-        (df["episode"] - 1).values.astype(int),
-        (df["step"]    - 1).values.astype(int),
-    ] = df["cat_idx"].values
+    for ep, step, n, cat in zip(df["episode"], df["step"], tries, df["cat_idx"]):
+        if pd.isna(cat):
+            continue
+        lo = max(0, int(step) - int(n))
+        matrix[int(ep) - 1, lo:int(step)] = cat
 
     # Build reward mask if steps.csv includes the reward column (written by train.py).
     # Positive reward = exploit succeeded at that step.
@@ -225,8 +235,10 @@ def _plot_returns(results_dir: Path, out: Path) -> None:
     num_episodes = int(df["episode"].max())
     num_steps    = int(df["step"].max())
 
+    trained = df[~df["action"].isin(_SKIP_LABELS)]
+
     matrix = np.full((num_episodes, num_steps), np.nan)
-    for ep, group in df.groupby("episode"):
+    for ep, group in trained.groupby("episode"):
         sorted_group = group.sort_values("step")
         ep_rewards = sorted_group["reward"].values
         G = 0.0
@@ -235,8 +247,12 @@ def _plot_returns(results_dir: Path, out: Path) -> None:
             G = r + gamma * G
             returns.append(G)
         returns.reverse()
-        steps = (sorted_group["step"].values - 1).astype(int)
-        matrix[ep - 1, steps] = returns
+        # Same backfill as step mode: one steps.csv row = one block, logged at its last
+        # try — spread G_t across the tries_used steps the block actually consumed.
+        tries = sorted_group["tries_used"] if "tries_used" in sorted_group.columns else pd.Series(1, index=sorted_group.index)
+        for step, n, g in zip(sorted_group["step"], tries, returns):
+            lo = max(0, int(step) - int(n))
+            matrix[ep - 1, lo:int(step)] = g
 
     masked = np.ma.masked_invalid(matrix)
     vmin = float(np.nanmin(matrix))

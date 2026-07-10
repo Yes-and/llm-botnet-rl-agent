@@ -1,0 +1,42 @@
+# REINFORCE training run — scenario-003 (mixed-target: 5 exploitable, 5 hardened, 2 dead)
+# Model: MiniMaxAI/MiniMax-M2.7, conditioned action head + duration head
+# Follow-up to -003 (fix-verification run, 50 steps x 30 episodes, entropy still ~5 —
+# consistent with -002's own trajectory at the same episode count, not a wrong learning_rate;
+# -002 didn't start dropping meaningfully until ep30-40). This run gives more room to see
+# both the ADR 012 fixes' effect on PROBE_REDIS dominance and a further-along entropy trend.
+# max_steps 50->100, num_episodes 30->50 (5000 total steps, ~62% of -002's 8000). Every other
+# hyperparameter unchanged from -002/-003 (lr=0.003, gamma=0.95, grad_clip=1.0,
+# entropy_coeff=0.01, duration_options, context_window=5) — same variable-isolation approach.
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 0
+seed_torch: 0
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 50
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: true
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

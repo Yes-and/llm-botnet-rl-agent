@@ -265,7 +265,13 @@ class Environment:
         if ip is not None:
             self._state.mark_tried(ip, action)
 
-        exploit = None if (parsed.exploit is None or already_exploited) else parsed.exploit
+        # The LLM's command can name any host regardless of which one host_idx
+        # resolved to (parsed.exploit.host comes from a regex over the command string,
+        # not from `ip`). Crediting that to the (host_slot, action) the policy actually
+        # sampled would reinforce the wrong pair for a result it didn't cause — so an
+        # exploit only counts here if it landed on the host this step targeted.
+        wrong_host = parsed.exploit is not None and parsed.exploit.host != ip
+        exploit = None if (parsed.exploit is None or already_exploited or wrong_host) else parsed.exploit
         reward = self._reward_calc.step(exploit)
         self._step_count += 1
 
@@ -279,6 +285,11 @@ class Environment:
             "truncated": result.truncated,
         }
         logger.debug("cmd=%r exit=%d truncated=%s", request.command, result.exit_code, result.truncated)
+        if wrong_host:
+            logger.info(
+                "  └─ exploit on %s ignored — step targeted %s (action=%s)",
+                parsed.exploit.host, ip, action.name,
+            )
         logger.info(
             "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f%s",
             self._step_count, self.config.max_steps,

@@ -120,6 +120,22 @@ def test_non_exploit_step_gives_step_penalty(env_mocks):
     assert reward == pytest.approx(-0.1)
 
 
+def test_exploit_on_wrong_host_gives_no_reward(env_mocks):
+    """The LLM's command can name a different host than host_idx resolved to — that must
+    not be credited to the (host_slot, action) the policy actually sampled, even though the
+    exploit genuinely happened (state still reflects it)."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.9 INFO")
+    mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
+
+    _, reward, _, info = env.step(Action.PROBE_REDIS, 0)  # host_idx 0 -> 172.18.0.5
+
+    assert reward == pytest.approx(-0.1)
+    assert info["exploit"] is None
+    assert env._state.get("172.18.0.9", "shell_access")
+
+
 # ── step(): deduplication ─────────────────────────────────────────────────────
 
 def test_second_exploit_on_same_host_gives_no_reward(env_mocks):

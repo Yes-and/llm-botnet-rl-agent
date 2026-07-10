@@ -60,22 +60,25 @@ def test_predict_return_types(policy, zero_state):
 def test_hard_mask_empty_slots(policy, zero_state):
     known_host_count = 2
     hidden = policy.trunk(zero_state.flatten())
-    probs = F.softmax(policy._masked_host_logits(hidden, known_host_count), dim=-1)
+    probs = F.softmax(policy._masked_host_logits(hidden, known_host_count, zero_state), dim=-1)
     assert probs[2 + known_host_count:].sum().item() == pytest.approx(0.0)
     assert probs[: 2 + known_host_count].sum().item() == pytest.approx(1.0)
 
 
 def test_hard_mask_no_hosts(policy, zero_state):
     hidden = policy.trunk(zero_state.flatten())
-    probs = F.softmax(policy._masked_host_logits(hidden, known_host_count=0), dim=-1)
+    probs = F.softmax(policy._masked_host_logits(hidden, known_host_count=0, state=zero_state), dim=-1)
     assert probs[2:].sum().item() == pytest.approx(0.0)
     assert probs[:2].sum().item() == pytest.approx(1.0)
 
 
 def test_hard_mask_full_hosts(policy):
+    # shell_access forced to 0 so this test isolates the empty-slot mask, not the
+    # separate shell_access-compromised-host mask exercised by test_shell_access_masks_host_slot.
     state = torch.rand(MAX_HOSTS, NUM_FEATURES)
+    state[:, _SHELL_ACCESS_IDX] = 0.0
     hidden = policy.trunk(state.flatten())
-    logits = policy._masked_host_logits(hidden, known_host_count=MAX_HOSTS)
+    logits = policy._masked_host_logits(hidden, known_host_count=MAX_HOSTS, state=state)
     assert not torch.isinf(logits).any()
 
 
@@ -104,15 +107,19 @@ def test_soft_mask_specific_host_slot(policy, zero_state):
         assert probs[int(a)].item() < 1e-6, f"{a.name} should be near-zero for specific host"
 
 
-def test_shell_access_masks_connect_actions(policy, zero_state):
-    """CONNECT_* must be near-zero for a host with shell_access=True."""
+def test_shell_access_masks_host_slot(policy, zero_state):
+    """A host with shell_access=True must be unselectable by the host head — EXPLOIT_REWARD
+    already fired once for it, so no action against it can score again. Enforced at the host
+    head (not the action head): masking every action in a row would leave softmax nothing to
+    contrast against, collapsing to uniform instead of near-zero (see ADR 012)."""
+    known_host_count = 2
     state = zero_state.clone()
-    state[0, _SHELL_ACCESS_IDX] = 1.0  # slot 2 maps to row 0
+    state[0, _SHELL_ACCESS_IDX] = 1.0  # slot 2 maps to row 0 — compromised
+    # row 1 (slot 3) left at shell_access=0 — must remain selectable
     hidden = policy.trunk(state.flatten())
-    action_input = policy._action_input(hidden, host_slot=2, state=state)
-    probs = F.softmax(policy._masked_action_logits(action_input, host_slot=2, state=state), dim=-1)
-    for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET):
-        assert probs[int(a)].item() < 1e-6, f"{a.name} should be masked when shell_access=True"
+    probs = F.softmax(policy._masked_host_logits(hidden, known_host_count, state), dim=-1)
+    assert probs[2].item() < 1e-6, "compromised host's slot should be masked"
+    assert probs[3].item() > 1e-6, "uncompromised host's slot should remain selectable"
 
 
 def test_creds_found_masks_brute_force_actions(policy, zero_state):
@@ -252,7 +259,7 @@ def test_sample_log_prob_and_entropy_include_duration_term(policy, zero_state):
 
     torch.manual_seed(7)
     hidden = policy.trunk(zero_state.flatten())
-    host_dist = Categorical(logits=policy._masked_host_logits(hidden, known_host_count=3))
+    host_dist = Categorical(logits=policy._masked_host_logits(hidden, known_host_count=3, state=zero_state))
     sampled_host = host_dist.sample()
 
     action_input = policy._action_input(hidden, sampled_host.item(), zero_state)

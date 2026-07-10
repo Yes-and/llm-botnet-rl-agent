@@ -26,7 +26,7 @@ obs, reward, done, info = env.step(action, host_idx)
 4. **Execute** — run the command via `Executor` inside the attacker container.
 5. **Parse** — `parse_step(command, output, exit_code)` returns state feature updates and an optional `ExploitEvent`.
 6. **Update state** — apply all feature updates to `EpisodeState`; mark `(ip, action)` as tried.
-7. **Deduplicate** — `ExploitEvent` is only forwarded to `RewardCalculator` the first time `shell_access` is set on that host. Subsequent detections of the same exploit return no reward.
+7. **Deduplicate and attribute** — `ExploitEvent` is only forwarded to `RewardCalculator` if (a) this is the first detection of `shell_access` on that host, **and** (b) `exploit.host` matches the host `host_idx` actually resolved to for this step. `exploit.host` comes from a regex over the LLM's own command string, not from `host_idx` — nothing about executing the command constrains which host it targets. Without check (b), an exploit against a host the policy didn't select would still be credited to the `(host_slot, action)` it did select, reinforcing the wrong pair for a result it didn't cause. State updates from the command always apply regardless of (b) — the exploit genuinely happened in the simulated world, it's only the RL credit that's withheld.
 8. **Reward** — `RewardCalculator.step(exploit)` applies `+10` (exploit) and `-0.1` (step penalty).
 9. **Return** — `(obs_tensor, reward, done, info)`.
 
@@ -86,6 +86,7 @@ Two log files are written per run:
 | `host_idx` out of range for a non-broadcast action | Step penalty applied, step skipped (`info["skip"] = "invalid_host_idx"`) |
 | LLM produces no tool call | Step penalty applied, step skipped (`info["skip"] = "no_tool_call"`); the dangling instruction is popped from message history to keep history well-formed |
 | Same exploit detected twice | Reward only on first detection; `shell_access` already True blocks re-reward |
+| Exploit lands on a host other than the one `host_idx` resolved to | No reward — logged as `exploit on <host> ignored — step targeted <host_idx's host>`; state still updates for the host actually exploited |
 | Unexpected exception in `step()` | Full traceback logged via `logger.exception`; step skipped with `info["skip"] = "unexpected_error"`. Training continues rather than crashing. |
 | Skip on a later try within a multi-try block | Block is still trained on (reward from earlier real tries retained); returned `info` has no `"skip"` key — `info["step"]`/`info["tries_used"]` reflect the block's real outcome |
 
@@ -94,3 +95,4 @@ Two log files are written per run:
 - `rl/environment.py` — implementation
 - `docs/adr/005-simulation-topology.md` — observer design context
 - `docs/adr/006-rl-state-action-reward.md` — state/action/reward spec
+- `docs/adr/012-shell-access-mask-and-exploit-host-attribution.md` — exploit-host attribution gate

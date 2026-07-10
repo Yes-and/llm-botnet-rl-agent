@@ -38,7 +38,6 @@ def _build_soft_mask() -> torch.Tensor:
 _SOFT_MASK = _build_soft_mask()
 
 _SHELL_ACCESS_IDX = FEATURE_INDEX["shell_access"]
-_CONNECT_ACTION_INDICES = [int(a) for a in (Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET)]
 
 # creds_found is one shared flag per host, not per-service — masking all three
 # BRUTE_FORCE_* actions off it is only correct because no current scenario target
@@ -98,12 +97,22 @@ class Policy(nn.Module):
         self.action_head = nn.Linear(action_in_dim, NUM_ACTIONS)
         self.duration_head = nn.Linear(action_in_dim + NUM_ACTIONS, len(self.duration_options))
 
-    def _masked_host_logits(self, hidden: torch.Tensor, known_host_count: int) -> torch.Tensor:
+    def _masked_host_logits(
+        self, hidden: torch.Tensor, known_host_count: int, state: torch.Tensor
+    ) -> torch.Tensor:
         logits = self.host_head(hidden)
+        invalid = torch.zeros(NUM_HOST_SLOTS, dtype=torch.bool, device=logits.device)
         if known_host_count < MAX_HOSTS:
-            empty = torch.zeros(NUM_HOST_SLOTS, dtype=torch.bool, device=logits.device)
-            empty[2 + known_host_count:] = True
-            logits = logits.masked_fill(empty, float("-inf"))
+            invalid[2 + known_host_count:] = True
+        # Host fully compromised — EXPLOIT_REWARD already fired once for it (RewardCalculator
+        # dedupes by (host, vulnerability)), so no action against it can score again. Masked
+        # here, not in the action head: masking every action in a row leaves softmax nothing
+        # to contrast against, which collapses to a uniform distribution instead of near-zero.
+        # Slots 0/1 (no_host/all_hosts) are never masked, so there's always a valid slot left.
+        if known_host_count > 0:
+            compromised = state[:known_host_count, _SHELL_ACCESS_IDX].bool()
+            invalid[2:2 + known_host_count] |= compromised
+        logits = logits.masked_fill(invalid, float("-inf"))
         return logits
 
     def _action_input(
@@ -128,8 +137,6 @@ class Policy(nn.Module):
     ) -> torch.Tensor:
         logits = self.action_head(action_input)
         soft_mask = _SOFT_MASK[host_slot].clone().to(logits.device)
-        if host_slot >= 2 and state[host_slot - 2, _SHELL_ACCESS_IDX].bool():
-            soft_mask[_CONNECT_ACTION_INDICES] = True
         if host_slot >= 2 and state[host_slot - 2, _CREDS_FOUND_IDX].bool():
             soft_mask[_BRUTE_FORCE_ACTION_INDICES] = True
         return logits.masked_fill(soft_mask, _SOFT_MASK_VALUE)
@@ -152,7 +159,7 @@ class Policy(nn.Module):
         """
         hidden = self.trunk(state.flatten())
 
-        host_logits = self._masked_host_logits(hidden, known_host_count)
+        host_logits = self._masked_host_logits(hidden, known_host_count, state)
         host_dist = Categorical(logits=host_logits)
         host_slot = host_dist.sample()
         host_slot_int = host_slot.item()
@@ -180,7 +187,7 @@ class Policy(nn.Module):
         """Argmax selection for evaluation; no gradient computation."""
         with torch.no_grad():
             hidden = self.trunk(state.flatten())
-            host_slot = self._masked_host_logits(hidden, known_host_count).argmax().item()
+            host_slot = self._masked_host_logits(hidden, known_host_count, state).argmax().item()
             action_input = self._action_input(hidden, host_slot, state)
             action_idx = self._masked_action_logits(action_input, host_slot, state).argmax().item()
             duration_input = self._duration_input(action_input, action_idx)

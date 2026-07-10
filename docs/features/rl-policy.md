@@ -36,14 +36,15 @@ Outputs a distribution over `MAX_HOSTS + 2` slots:
 
 Host slots beyond `len(known_hosts())` are hard-masked to `-inf` before softmax. Slots are assigned randomly each episode reset so the policy must learn from feature content, not position.
 
+A host slot is also hard-masked to `-inf` if that host's `shell_access` feature is `1` — `EXPLOIT_REWARD` fires once per `(host, vulnerability)` (see `RewardCalculator`), so once a host is fully compromised, no action against it can ever score again; there is nothing left to learn there. This mask lives in the host head, not the action head: masking every action in an action-head row would leave softmax nothing to contrast against and collapse to a *uniform* distribution over that row instead of near-zero (masking is inherently relative — see ADR 012). Masking the host slot itself works because slots 0/1 (`no_host`/`all_hosts`) are never masked, always leaving a valid fallback.
+
+This mask was originally narrower and lived in the action head: only `CONNECT_SSH`/`CONNECT_FTP`/`CONNECT_TELNET` were masked (added after re-exploitation attempts on already-compromised hosts, s003 MiniMax M2.5 conditioned run, episode 49). Widened and moved 2026-07-10 after the same failure mode reappeared for `PROBE_REDIS`/`PROBE_MONGO` on MiniMax M2.7 (`s003-train-minimax-m27-conditioned-002`, episode 80: one `PROBE_REDIS` success on a host, then 19 more `PROBE_REDIS` picks against it in the same episode, each burning the full duration-head try budget for `-0.5`). The conditioned action head (ADR 010) is meant to learn this from `tried_probe_redis`/`shell_access` features alone, but at 80 episodes it evidently hadn't — the same convergence-onto-`PROBE_REDIS` failure ADR 010 was written to fix. See ADR 012.
+
 ## Action Head
 
 Outputs a distribution over all 13 action types (see `rl/actions.py`). Structurally invalid `(host, action)` combinations (e.g. `SCAN_NETWORK` with a specific host slot) are soft-masked: logits are pushed to a large negative value, keeping near-zero probability without hard exclusion.
 
-Two dynamic hard masks are applied at inference time:
-
-- If a host's `shell_access` feature is `1`, all `CONNECT_*` actions (`CONNECT_SSH`, `CONNECT_FTP`, `CONNECT_TELNET`) are masked to `-inf` for that host slot. This prevents re-exploitation of already-compromised hosts — a case where the negative reward signal alone proved insufficient (s003 MiniMax M2.5 conditioned run, episode 49).
-- If a host's `creds_found` feature is `1`, all `BRUTE_FORCE_*` actions (`BRUTE_FORCE_SSH`, `BRUTE_FORCE_FTP`, `BRUTE_FORCE_TELNET`) are masked to `-inf` for that host slot. This prevents wasteful re-brute-forcing once credentials are already known — increasingly costly now that the duration head (see below) can commit up to 5 consecutive tries to one bad selection. Note: `creds_found` is one shared flag per host, not per-service, so this is only correct because no current scenario target exposes more than one crackable service per host. A future multi-service target would need per-service credential features before this mask stays correct.
+One dynamic hard mask is applied at inference time: if a host's `creds_found` feature is `1`, all `BRUTE_FORCE_*` actions (`BRUTE_FORCE_SSH`, `BRUTE_FORCE_FTP`, `BRUTE_FORCE_TELNET`) are masked to `-inf` for that host slot. This prevents wasteful re-brute-forcing once credentials are already known but before shell access is confirmed (an interim state the host head's `shell_access` mask above doesn't cover, since that mask only fires once `shell_access` itself is `1`). Note: `creds_found` is one shared flag per host, not per-service, so this is only correct because no current scenario target exposes more than one crackable service per host. A future multi-service target would need per-service credential features before this mask stays correct.
 
 All other precondition checks (port open, etc.) are left to the learned reward signal rather than hard-masking, to avoid over-constraining the agent's exploration.
 
@@ -107,6 +108,7 @@ action, host_slot, duration                    = policy.predict(state_tensor, kn
 - `docs/adr/007-rl-algorithm-and-policy-design.md` — original design decisions
 - `docs/adr/010-conditioned-action-head.md` — conditioned action head rationale
 - `docs/adr/011-action-duration-head.md` — duration head rationale and multi-try block semantics
+- `docs/adr/012-shell-access-mask-and-exploit-host-attribution.md` — widened shell_access mask; exploit-host attribution gate
 - `rl/actions.py` — action enum
 - `rl/state.py` — state tensor structure
 - `rl/environment.py` — `step_block()`, which executes the sampled duration

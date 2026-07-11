@@ -1,0 +1,40 @@
+# REINFORCE training run — scenario-002 (baseline, 5 exploitable targets, no hardened/dead hosts)
+# Model: MiniMaxAI/MiniMax-M2.7, conditioned action head + duration head
+# First M2.7 run on s002. Carries the current s003 conditioned-004 hyperparameters over
+# unchanged (lr=0.003, gamma=0.95, grad_clip=1.0, entropy_coeff=0.01, duration_options,
+# context_window=5) so this is a scenario-only comparison: does the same policy/training
+# setup converge faster on s002's simpler, single-tier target set while s003 diagnosis
+# continues in parallel. num_episodes/max_steps set to 50/50 per user request.
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s002_attacker
+max_steps: 50
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 0
+seed_torch: 0
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 1
+conditioned_action_head: true
+duration_options: [1, 2, 3, 5]
+
+# --- Training ---
+num_episodes: 50
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: true
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

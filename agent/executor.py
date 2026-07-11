@@ -14,11 +14,11 @@ ALLOWED_BINARIES = frozenset({
 })
 
 _DANGEROUS_PATTERNS = [
-    re.compile(r"\brm\b"),
-    re.compile(r"\bdd\b"),
-    re.compile(r"\bmkfs\b"),
-    re.compile(r":\(\)\s*\{"),   # fork bomb: matches :(){ ... } shell function definition
-    re.compile(r">\s*/dev/"),    # write to /dev/
+    (re.compile(r"\brm\b"), "deletes files"),
+    (re.compile(r"\bdd\b"), "raw disk I/O"),
+    (re.compile(r"\bmkfs\b"), "formats a filesystem"),
+    (re.compile(r":\(\)\s*\{"), "fork bomb"),  # matches :(){ ... } shell function definition
+    (re.compile(r">\s*/dev/"), "redirects output to /dev/ — remove the redirect and retry; output must stay visible"),
 ]
 
 
@@ -66,9 +66,9 @@ class Executor:
                 dry_run=self.dry_run,
             )
 
-        for pattern in _DANGEROUS_PATTERNS:
+        for pattern, reason in _DANGEROUS_PATTERNS:
             if pattern.search(command):
-                rejection = f"[REJECTED] Command matches dangerous pattern: {pattern.pattern!r}"
+                rejection = f"[REJECTED] Command blocked: {reason}"
                 logger.warning("REJECTED (blocklist): %s", command)
                 return CommandResult(
                     command=command,

@@ -106,6 +106,13 @@ def test_dev_write_rejected(command):
     assert result.exit_code == -1
 
 
+def test_dev_write_rejection_message_is_actionable():
+    executor = Executor("test-container")
+    result = executor.execute("find /tmp -name '*.txt' 2>/dev/null")
+    assert result.exit_code == -1
+    assert "remove the redirect" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Dry-run
 # ---------------------------------------------------------------------------

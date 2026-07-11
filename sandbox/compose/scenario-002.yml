@@ -18,39 +18,39 @@ services:
     stdin_open: true
     tty: true
 
-  ssh-target:
+  host01:  # SSH, weak creds
     build: ../images/target
-    container_name: s002_ssh
-    hostname: ssh-target
+    container_name: s002_host01
+    hostname: host01
     networks:
       - s002_net
 
-  telnet-target:
+  host02:  # Telnet, weak creds
     build: ../images/telnet-target
-    container_name: s002_telnet
-    hostname: telnet-target
+    container_name: s002_host02
+    hostname: host02
     networks:
       - s002_net
 
-  ftp-target:
+  host03:  # FTP, anonymous login
     build: ../images/ftp-target
-    container_name: s002_ftp
-    hostname: ftp-target
+    container_name: s002_host03
+    hostname: host03
     networks:
       - s002_net
 
-  redis-target:
+  host04:  # Redis, no auth
     image: redis:latest
-    container_name: s002_redis
-    hostname: redis-target
+    container_name: s002_host04
+    hostname: host04
     command: redis-server --protected-mode no
     networks:
       - s002_net
 
-  mongodb-target:
+  host05:  # MongoDB, no auth
     image: mongo:4.4
-    container_name: s002_mongodb
-    hostname: mongodb-target
+    container_name: s002_host05
+    hostname: host05
     networks:
       - s002_net
 

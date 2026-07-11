@@ -18,100 +18,101 @@ services:
     stdin_open: true
     tty: true
 
-  # --- Exploitable hosts ---
+  # --- Hosts, generically named on purpose: hostname/container_name/service
+  # key must not reveal service type or hardened-status, since Docker's
+  # embedded DNS resolves all three as aliases and nmap's rDNS surfaces them
+  # to the LLM during ordinary subnet scanning (confirmed leaking in a real
+  # training run — see ADR 013). Numbering is deliberately shuffled, not
+  # grouped by tier, so the number itself carries no signal either. ---
 
-  ssh-target:
+  host01:  # SSH, weak creds
     build: ../images/target
-    container_name: s003_ssh
-    hostname: ssh-target
+    container_name: s003_host01
+    hostname: host01
     networks:
       - s003_net
 
-  ftp-target:
-    build: ../images/ftp-target
-    container_name: s003_ftp
-    hostname: ftp-target
-    networks:
-      - s003_net
-
-  telnet-target:
-    build: ../images/telnet-target
-    container_name: s003_telnet
-    hostname: telnet-target
-    networks:
-      - s003_net
-
-  redis-target:
+  host02:  # Redis, hardened (requirepass)
     image: redis:latest
-    container_name: s003_redis
-    hostname: redis-target
-    command: redis-server --protected-mode no
-    networks:
-      - s003_net
-
-  mongodb-target:
-    image: mongo:4.4
-    container_name: s003_mongodb
-    hostname: mongodb-target
-    networks:
-      - s003_net
-
-  # --- Hardened hosts (same services, not exploitable with available tools) ---
-
-  ssh-hardened:
-    build: ../images/ssh-hardened
-    container_name: s003_ssh_hard
-    hostname: ssh-hardened
-    networks:
-      - s003_net
-
-  ftp-hardened:
-    build: ../images/ftp-hardened
-    container_name: s003_ftp_hard
-    hostname: ftp-hardened
-    networks:
-      - s003_net
-
-  telnet-hardened:
-    build: ../images/telnet-hardened
-    container_name: s003_telnet_hard
-    hostname: telnet-hardened
-    networks:
-      - s003_net
-
-  redis-hardened:
-    image: redis:latest
-    container_name: s003_redis_hard
-    hostname: redis-hardened
+    container_name: s003_host02
+    hostname: host02
     command: redis-server --requirepass "Xk9mP2vL8nQ5rT"
     networks:
       - s003_net
 
-  mongodb-hardened:
+  host03:  # Telnet, weak creds
+    build: ../images/telnet-target
+    container_name: s003_host03
+    hostname: host03
+    networks:
+      - s003_net
+
+  host04:  # dead: ping-visible, no open ports
+    image: alpine:latest
+    container_name: s003_host04
+    hostname: host04
+    command: sleep infinity
+    networks:
+      - s003_net
+
+  host05:  # MongoDB, hardened (auth required)
     image: mongo:4.4
-    container_name: s003_mongodb_hard
-    hostname: mongodb-hardened
+    container_name: s003_host05
+    hostname: host05
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: "Xk9mP2vL8nQ5rT"
     networks:
       - s003_net
 
-  # --- Dead hosts (ping-visible, no open ports) ---
+  host06:  # FTP, anonymous login
+    build: ../images/ftp-target
+    container_name: s003_host06
+    hostname: host06
+    networks:
+      - s003_net
 
-  dead-1:
+  host07:  # SSH, hardened (strong password)
+    build: ../images/ssh-hardened
+    container_name: s003_host07
+    hostname: host07
+    networks:
+      - s003_net
+
+  host08:  # MongoDB, no auth
+    image: mongo:4.4
+    container_name: s003_host08
+    hostname: host08
+    networks:
+      - s003_net
+
+  host09:  # dead: ping-visible, no open ports
     image: alpine:latest
-    container_name: s003_dead_1
-    hostname: dead-1
+    container_name: s003_host09
+    hostname: host09
     command: sleep infinity
     networks:
       - s003_net
 
-  dead-2:
-    image: alpine:latest
-    container_name: s003_dead_2
-    hostname: dead-2
-    command: sleep infinity
+  host10:  # Telnet, hardened (strong password)
+    build: ../images/telnet-hardened
+    container_name: s003_host10
+    hostname: host10
+    networks:
+      - s003_net
+
+  host11:  # Redis, no auth
+    image: redis:latest
+    container_name: s003_host11
+    hostname: host11
+    command: redis-server --protected-mode no
+    networks:
+      - s003_net
+
+  host12:  # FTP, hardened (no anonymous login)
+    build: ../images/ftp-hardened
+    container_name: s003_host12
+    hostname: host12
     networks:
       - s003_net
 

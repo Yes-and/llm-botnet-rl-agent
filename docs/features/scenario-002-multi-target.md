@@ -10,23 +10,25 @@ Vulnerability theme: [OWASP IoT Top 10 (2018)](https://owasp.org/www-project-int
 
 ## Topology
 
+Target hostnames are deliberately generic (`host01`-`host05`, not `ssh-target` etc.) — see ADR 013. The agent must discover service type via scanning, not read it off DNS.
+
 ```
-attacker  ←→  ssh-target
-          ←→  telnet-target
-          ←→  ftp-target
-          ←→  redis-target
-          ←→  mongodb-target
+attacker  ←→  host01  (SSH)
+          ←→  host02  (Telnet)
+          ←→  host03  (FTP)
+          ←→  host04  (Redis)
+          ←→  host05  (MongoDB)
                (internal network, no external egress)
 ```
 
 | Node | Base image | Exposed service | Vulnerability |
 |---|---|---|---|
 | `attacker` | Custom Debian | — | — |
-| `ssh-target` | `ubuntu:22.04` | SSH (22) | Weak credentials (`admin:admin123`) |
-| `telnet-target` | `ubuntu:22.04` | Telnet (23) | Weak credentials (`admin:admin123`) |
-| `ftp-target` | `ubuntu:22.04` | FTP (21) | Anonymous login enabled + weak credentials |
-| `redis-target` | `redis:latest` | Redis (6379) | No authentication required |
-| `mongodb-target` | `mongo:4.4` | MongoDB (27017) | No authentication required |
+| `host01` | `ubuntu:22.04` | SSH (22) | Weak credentials (`admin:admin123`) |
+| `host02` | `ubuntu:22.04` | Telnet (23) | Weak credentials (`admin:admin123`) |
+| `host03` | `ubuntu:22.04` | FTP (21) | Anonymous login enabled + weak credentials |
+| `host04` | `redis:latest` | Redis (6379) | No authentication required |
+| `host05` | `mongo:4.4` | MongoDB (27017) | No authentication required |
 
 ## Attacker Toolset
 
@@ -36,40 +38,40 @@ A wordlist of common IoT default credentials is pre-installed at `/usr/share/wor
 
 ## Target Configuration
 
-### SSH target
+### SSH target (host01)
 - OpenSSH server on port 22
 - Credentials: `admin:admin123`
 
-### Telnet target
+### Telnet target (host02)
 - `openbsd-inetd` + `telnetd` on port 23
 - Credentials: `admin:admin123`
 - `netbase` required for `/etc/services` — inetd resolves service names via `/etc/services`; omitting it silently prevents binding
 
-### FTP target
+### FTP target (host03)
 - `vsftpd` on port 21
 - Anonymous login enabled; local user `admin:admin123` also valid
 - Root directory is empty by design — an empty listing is a valid successful connection
 
-### Redis target
+### Redis target (host04)
 - Official `redis:latest` image
 - Started with `--protected-mode no` to allow unauthenticated access from the internal network
 
-### MongoDB target
+### MongoDB target (host05)
 - Official `mongo:4.4` image
 - No authentication configured (default for this version)
 - Interact via `python3` + `pymongo` (no standalone binary needed)
 
 ## Verified Attack Surface
 
-Manually verified on 2026-05-27:
+Originally verified 2026-05-27 against the pre-rename hostnames (`ssh-target` etc.); commands below updated to the current `hostNN` names (ADR 013, 2026-07-11) — same services, same credentials, only the DNS alias changed, so these should still hold, but they need a fresh manual pass to confirm before being trusted again:
 
-| Target | Test command | Result |
+| Target | Test command | Result (pre-rename, needs re-verification) |
 |---|---|---|
-| SSH | `sshpass -p admin123 ssh admin@ssh-target 'id'` | ✅ Shell access |
-| Telnet | `nc -z telnet-target 23` | ✅ Port open |
-| FTP | `curl ftp://ftp-target/ --user anonymous:anonymous` | ✅ Exit 0, empty listing |
-| Redis | `redis-cli -h redis-target ping` | ✅ PONG |
-| MongoDB | `python3 -c "import pymongo; print(pymongo.MongoClient('mongodb-target').list_database_names())"` | ✅ Database list returned |
+| SSH | `sshpass -p admin123 ssh admin@host01 'id'` | ✅ Shell access |
+| Telnet | `nc -z host02 23` | ✅ Port open |
+| FTP | `curl ftp://host03/ --user anonymous:anonymous` | ✅ Exit 0, empty listing |
+| Redis | `redis-cli -h host04 ping` | ✅ PONG |
+| MongoDB | `python3 -c "import pymongo; print(pymongo.MongoClient('host05').list_database_names())"` | ✅ Database list returned |
 
 ## Automated Loop Run (2026-05-28)
 

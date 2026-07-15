@@ -1,0 +1,39 @@
+# Smoke test — ADR 014 Phase 1 (single-host engagement, worker only).
+# First REINFORCE run against the new engine: confirms the engagement loop,
+# ABANDON, per-engagement return resets, and the policy's is_valid()-based
+# masking all wire together end-to-end before spending a real training budget.
+# No conditioned_action_head / duration_options — both retired by ADR 014;
+# the action head is unconditionally host-conditioned now, and there's no
+# duration head (single-host persistence subsumes it).
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 20
+max_engagement_steps: 5
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+context_window: 5
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 2
+
+# --- Training ---
+num_episodes: 2
+gamma: 0.99
+learning_rate: 0.001
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

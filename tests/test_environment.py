@@ -2,8 +2,9 @@
 Environment tests. LLM and Docker interactions are mocked; all tests run offline.
 
 The cases here focus on logic that fails silently: reward deduplication, host
-resolution, coverage tracking, and episode termination. Correctness of
-parse_step() itself is covered separately in test_parser.py.
+resolution, coverage tracking, engagement/episode termination, and the scripted
+initial scan. Correctness of parse_step() itself is covered separately in
+test_parser.py.
 """
 
 from unittest.mock import patch
@@ -20,10 +21,11 @@ from rl.state import MAX_HOSTS, NUM_FEATURES
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _req(command: str) -> CommandRequest:
+def _req(command: str, reasoning: str = "") -> CommandRequest:
     return CommandRequest(
         command=command,
         tool_call_id="tc_test",
+        reasoning=reasoning,
         assistant_message={"role": "assistant", "content": None},
     )
 
@@ -45,15 +47,19 @@ def env_mocks():
         mock_llm = mock_llm_cls.return_value
         mock_exec = mock_exec_cls.return_value
         mock_exec.execute.return_value = _res()  # exit_code=0 satisfies reachability probe
-        env = Environment(EnvironmentConfig(container_name="test", max_steps=3))
-        env.reset()  # initialise _n_header and message history
-        mock_exec.reset_mock()  # clear probe call so tests start with clean call history
+        # The scripted scan runs inside reset(); default it to an empty-output nmap
+        # command so tests start from a known empty pool unless they override it.
+        mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+        env = Environment(EnvironmentConfig(container_name="test", max_steps=5, max_engagement_steps=3))
+        env.reset()
+        mock_exec.reset_mock()
+        mock_llm.reset_mock()
         yield env, mock_llm, mock_exec
 
 
-# ── reset() ───────────────────────────────────────────────────────────────────
+# ── reset() / scripted initial scan ────────────────────────────────────────────
 
-def test_reset_returns_zero_tensor(env_mocks):
+def test_reset_returns_zero_tensor_when_scan_finds_nothing(env_mocks):
     env, _, _ = env_mocks
     obs = env.reset()
     assert isinstance(obs, torch.Tensor)
@@ -70,252 +76,237 @@ def test_reset_clears_state_from_previous_episode(env_mocks):
     assert obs.sum().item() == 0.0
 
 
-# ── step(): state updates ─────────────────────────────────────────────────────
-
-def test_broadcast_step_discovers_host(env_mocks):
+def test_reset_runs_scripted_scan_and_discovers_hosts(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
     mock_exec.execute.return_value = _res("Host: 172.18.0.5 ()\tStatus: Up\n")
 
-    obs, reward, _, info = env.step(Action.SCAN_NETWORK, 0)
+    env.reset()
 
     assert "172.18.0.5" in env._state.known_hosts()
-    assert reward == pytest.approx(-0.1)
-    assert info["exploit"] is None
+    mock_llm.complete.assert_called_once()
 
 
-def test_per_host_step_marks_tried(env_mocks):
+def test_reset_raises_on_scan_llm_failure(env_mocks):
+    """An empty pool from a swallowed scan failure would silently waste the whole
+    episode — this must be a hard error, not a skip."""
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.side_effect = ValueError("no tool call")
+
+    with pytest.raises(RuntimeError, match="Scripted initial scan failed"):
+        env.reset()
+
+
+# ── start_engagement() ─────────────────────────────────────────────────────────
+
+def test_start_engagement_sets_active_host(env_mocks):
+    env, _, _ = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
+    assert env.active_host == "172.18.0.5"
+
+
+def test_start_engagement_unknown_host_raises(env_mocks):
+    env, _, _ = env_mocks
+    with pytest.raises(ValueError):
+        env.start_engagement("172.18.0.99")
+
+
+def test_interact_without_active_engagement_raises(env_mocks):
+    env, _, _ = env_mocks
+    with pytest.raises(RuntimeError, match="no active engagement"):
+        env.interact(Action.SCAN_PORTS)
+
+
+# ── interact(): state updates, reward, attribution ─────────────────────────────
+
+def test_interact_marks_tried(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
     mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
     mock_exec.execute.return_value = _res("")
 
-    env.step(Action.SCAN_PORTS, 0)
+    env.interact(Action.SCAN_PORTS)
 
     assert env._state.get("172.18.0.5", "tried_scan_ports")
 
 
-# ── step(): reward ────────────────────────────────────────────────────────────
+def test_interact_non_exploit_gives_step_penalty(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
+    mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
+    mock_exec.execute.return_value = _res("")
 
-def test_exploit_step_gives_positive_reward(env_mocks):
+    _, reward, _, _ = env.interact(Action.SCAN_PORTS)
+
+    assert reward == pytest.approx(-0.1)
+
+
+def test_interact_exploit_gives_reward_removes_host_and_ends_engagement(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    env.start_engagement("172.18.0.5")
     mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
     mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
 
-    _, reward, _, info = env.step(Action.PROBE_REDIS, 0)
+    _, reward, _, info = env.interact(Action.PROBE_REDIS)
 
     assert reward == pytest.approx(9.9)
     assert info["exploit"] is not None
     assert info["exploit"].vulnerability == "redis_no_auth"
+    assert info["engagement_done"] is True
+    assert "172.18.0.5" not in env._state.known_hosts()
+    assert env.active_host is None
 
 
-def test_non_exploit_step_gives_step_penalty(env_mocks):
-    env, mock_llm, mock_exec = env_mocks
-    mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
-    mock_exec.execute.return_value = _res("")
-
-    _, reward, _, _ = env.step(Action.SCAN_NETWORK, 0)
-
-    assert reward == pytest.approx(-0.1)
-
-
-def test_exploit_on_wrong_host_gives_no_reward(env_mocks):
-    """The LLM's command can name a different host than host_idx resolved to — that must
-    not be credited to the (host_slot, action) the policy actually sampled, even though the
-    exploit genuinely happened (state still reflects it)."""
+def test_interact_exploit_on_wrong_host_gives_no_reward_and_engagement_continues(env_mocks):
+    """The LLM's command can name a different host than the active engagement — that
+    must not be credited to the action the policy actually sampled, even though the
+    exploit genuinely happened (state still reflects it on the host it hit)."""
     env, mock_llm, mock_exec = env_mocks
     env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    env.start_engagement("172.18.0.5")
     mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.9 INFO")
     mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
 
-    _, reward, _, info = env.step(Action.PROBE_REDIS, 0)  # host_idx 0 -> 172.18.0.5
+    _, reward, _, info = env.interact(Action.PROBE_REDIS)
 
     assert reward == pytest.approx(-0.1)
     assert info["exploit"] is None
+    assert info["engagement_done"] is False
     assert env._state.get("172.18.0.9", "shell_access")
+    assert "172.18.0.5" in env._state.known_hosts()
 
 
-# ── step(): deduplication ─────────────────────────────────────────────────────
-
-def test_second_exploit_on_same_host_gives_no_reward(env_mocks):
+def test_start_engagement_on_solved_host_raises(env_mocks):
+    """Once a host is removed from the pool, it can't be re-engaged — that IS the
+    dedup mechanism now (replaces the old shell_access mask)."""
     env, mock_llm, mock_exec = env_mocks
     env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
+    env.start_engagement("172.18.0.5")
     mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
     mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
+    env.interact(Action.PROBE_REDIS)
 
-    _, reward1, _, info1 = env.step(Action.PROBE_REDIS, 0)
-    _, reward2, _, info2 = env.step(Action.PROBE_REDIS, 0)
-
-    assert reward1 == pytest.approx(9.9)
-    assert info1["exploit"] is not None
-    assert reward2 == pytest.approx(-0.1)
-    assert info2["exploit"] is None
+    with pytest.raises(ValueError):
+        env.start_engagement("172.18.0.5")
 
 
-# ── step(): edge cases ────────────────────────────────────────────────────────
+# ── interact(): ABANDON ─────────────────────────────────────────────────────────
 
-def test_invalid_host_idx_skips_without_llm_call(env_mocks):
+def test_abandon_ends_engagement_and_costs_step_penalty(env_mocks):
     env, mock_llm, mock_exec = env_mocks
-    # No hosts discovered; host_idx=0 is out of range for a per-host action
-    _, reward, _, info = env.step(Action.SCAN_PORTS, 0)
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
 
-    mock_llm.complete.assert_not_called()
-    assert info.get("skip") == "invalid_host_idx"
+    _, reward, _, info = env.interact(Action.ABANDON)
+
     assert reward == pytest.approx(-0.1)
+    assert info["engagement_done"] is True
+    assert env.active_host is None
+    mock_llm.complete.assert_not_called()  # ABANDON is mechanical, not LLM-driven
 
 
-def test_no_tool_call_skips_without_executing(env_mocks):
+def test_abandon_counts_against_step_budget(env_mocks):
     env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
+
+    assert env.step_count == 0
+    env.interact(Action.ABANDON)
+    assert env.step_count == 1
+
+
+# ── interact(): safety cap ──────────────────────────────────────────────────────
+
+def test_safety_cap_ends_engagement_without_exploit():
+    with patch("rl.environment.LLMClient") as mock_llm_cls, \
+         patch("rl.environment.Executor") as mock_exec_cls:
+        mock_llm = mock_llm_cls.return_value
+        mock_exec = mock_exec_cls.return_value
+        mock_exec.execute.return_value = _res()
+        mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+        env = Environment(EnvironmentConfig(container_name="test", max_steps=40, max_engagement_steps=2))
+        env.reset()
+        env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
+        env.start_engagement("172.18.0.5")
+        mock_llm.complete.return_value = _req("hydra -l admin -P wordlist.txt ssh://172.18.0.5")
+        mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
+
+        _, _, _, info1 = env.interact(Action.BRUTE_FORCE_SSH)
+        assert info1["engagement_done"] is False  # 1st of 2 allowed steps
+
+        _, _, _, info2 = env.interact(Action.BRUTE_FORCE_SSH)
+        assert info2["engagement_done"] is True  # cap hit
+        assert info2["exploit"] is None
+        assert env.active_host is None
+
+
+# ── interact(): skip handling ───────────────────────────────────────────────────
+
+def test_skip_does_not_end_engagement(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
     mock_llm.complete.side_effect = ValueError("no tool call")
 
-    _, reward, _, info = env.step(Action.SCAN_NETWORK, 0)
+    _, reward, _, info = env.interact(Action.SCAN_PORTS)
 
     mock_exec.execute.assert_not_called()
     assert info.get("skip") == "no_tool_call"
     assert reward == pytest.approx(-0.1)
+    assert info["engagement_done"] is False
+    assert env.active_host == "172.18.0.5"  # engagement continues
 
 
-# ── step(): done condition ────────────────────────────────────────────────────
+def test_skip_still_counts_against_safety_cap():
+    with patch("rl.environment.LLMClient") as mock_llm_cls, \
+         patch("rl.environment.Executor") as mock_exec_cls:
+        mock_llm = mock_llm_cls.return_value
+        mock_exec = mock_exec_cls.return_value
+        mock_exec.execute.return_value = _res()
+        mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+        env = Environment(EnvironmentConfig(container_name="test", max_steps=40, max_engagement_steps=2))
+        env.reset()
+        env._state.update("172.18.0.5", {"is_alive": True})
+        env.start_engagement("172.18.0.5")
+        mock_llm.complete.side_effect = ValueError("no tool call")
+
+        env.interact(Action.SCAN_PORTS)
+        _, _, _, info2 = env.interact(Action.SCAN_PORTS)
+
+        assert info2["engagement_done"] is True, "repeated skips must not let an engagement run forever"
+
+
+# ── interact(): episode-level done ──────────────────────────────────────────────
 
 def test_done_triggers_at_max_steps(env_mocks):
     env, mock_llm, mock_exec = env_mocks
-    mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
+    mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
     mock_exec.execute.return_value = _res("")
 
-    # max_steps=3; steps 1 and 2 should not be done
-    for _ in range(2):
-        _, _, done, _ = env.step(Action.SCAN_NETWORK, 0)
-        assert not done
-
-    _, _, done, _ = env.step(Action.SCAN_NETWORK, 0)
+    # env_mocks: max_steps=5, max_engagement_steps=3 — re-engage after the first
+    # engagement's cap to reach the episode budget without an exploit.
+    for _ in range(3):
+        env.interact(Action.SCAN_PORTS)
+    env.start_engagement("172.18.0.5")
+    _, _, done, _ = env.interact(Action.SCAN_PORTS)
+    assert not done
+    _, _, done, _ = env.interact(Action.SCAN_PORTS)
     assert done
 
 
 def test_step_count_increments(env_mocks):
     env, mock_llm, mock_exec = env_mocks
-    mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env.start_engagement("172.18.0.5")
+    mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
     mock_exec.execute.return_value = _res("")
 
     assert env.step_count == 0
-    env.step(Action.SCAN_NETWORK, 0)
+    env.interact(Action.SCAN_PORTS)
     assert env.step_count == 1
-    env.step(Action.SCAN_NETWORK, 0)
-    assert env.step_count == 2
-
-
-# ── step_block(): early exit ──────────────────────────────────────────────────
-
-def test_step_block_stops_early_on_exploit(env_mocks):
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
-    mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
-    mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
-
-    _, block_reward, _, info = env.step_block(Action.PROBE_REDIS, 0, max_tries=5)
-
-    assert info["tries_used"] == 1
-    assert mock_exec.execute.call_count == 1
-    assert block_reward == pytest.approx(9.9)
-    assert info["exploit"] is not None
-    assert info["exploit"].vulnerability == "redis_no_auth"
-
-
-def test_step_block_stops_early_on_creds_found(env_mocks):
-    """BRUTE_FORCE_SSH never emits an ExploitEvent — the block should stop as soon as
-    creds_found flips true, not run to max_tries."""
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
-    cmd = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
-    mock_llm.complete.side_effect = [cmd, cmd]
-    mock_exec.execute.side_effect = [
-        _res("1 of 1 target completed, 0 valid passwords found\n"),
-        _res("[22][ssh] host: 172.18.0.5   login: admin   password: admin123\n"),
-    ]
-
-    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=5)
-
-    assert info["tries_used"] == 2
-    assert mock_exec.execute.call_count == 2
-    assert env._state.get("172.18.0.5", "creds_found")
-    assert block_reward == pytest.approx(-0.2)  # two step penalties, no exploit reward
-    assert info["exploit"] is None
-
-
-def test_step_block_exhausts_when_no_progress(env_mocks):
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
-    mock_llm.complete.return_value = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
-    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
-
-    # env_mocks' max_steps=3; use max_tries=2 so this test isn't confounded by hitting done.
-    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=2)
-
-    assert info["tries_used"] == 2
-    assert mock_exec.execute.call_count == 2
-    assert not env._state.get("172.18.0.5", "creds_found")
-    assert block_reward == pytest.approx(-0.2)
-
-
-# ── step_block(): skip handling ───────────────────────────────────────────────
-
-def test_step_block_skip_on_first_try_reports_block_skip(env_mocks):
-    """Matches step()'s existing single-try skip behaviour exactly — nothing executed,
-    whole block reported as skip so training excludes it."""
-    env, mock_llm, mock_exec = env_mocks
-    mock_llm.complete.side_effect = ValueError("no tool call")
-
-    _, block_reward, _, info = env.step_block(Action.SCAN_NETWORK, 0, max_tries=5)
-
-    mock_exec.execute.assert_not_called()
-    assert info.get("skip") == "no_tool_call"
-    assert info["tries_used"] == 1
-    assert block_reward == pytest.approx(-0.1)
-
-
-def test_step_block_skip_after_real_tries_keeps_earned_reward(env_mocks):
-    """A skip on a later try should not erase the reward already earned, and the block
-    should NOT be reported as a top-level skip — real tries happened, so it should
-    still be trained on."""
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
-    real_cmd = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
-    mock_llm.complete.side_effect = [real_cmd, ValueError("no tool call")]
-    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
-
-    _, block_reward, _, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=5)
-
-    assert info.get("skip") is None
-    assert info["tries_used"] == 2
-    assert mock_exec.execute.call_count == 1
-    assert block_reward == pytest.approx(-0.2)  # one real try + one skip, both -0.1
-
-
-# ── step_block(): step budget ─────────────────────────────────────────────────
-
-def test_step_block_charges_real_tries_against_step_budget(env_mocks):
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
-    mock_llm.complete.return_value = _req("hydra -l admin -P /usr/share/wordlists/passwords.txt ssh://172.18.0.5")
-    mock_exec.execute.return_value = _res("1 of 1 target completed, 0 valid passwords found\n")
-
-    assert env.step_count == 0
-    _, _, done, info = env.step_block(Action.BRUTE_FORCE_SSH, 0, max_tries=2)
-
-    assert env.step_count == 2  # both tries counted against the budget, not 1 per block
-    assert info["tries_used"] == 2
-    assert not done  # env_mocks' max_steps=3
-
-
-# ── step(): equivalence to step_block(..., max_tries=1) ───────────────────────
-
-def test_step_equals_step_block_of_one(env_mocks):
-    env, mock_llm, mock_exec = env_mocks
-    env._state.update("172.18.0.5", {"is_alive": True, "port_6379_open": True})
-    mock_llm.complete.return_value = _req("redis-cli -h 172.18.0.5 INFO")
-    mock_exec.execute.return_value = _res("# Server\nredis_version:7.0\n")
-
-    _, reward, _, info = env.step(Action.PROBE_REDIS, 0)
-
-    assert reward == pytest.approx(9.9)
-    assert info["tries_used"] == 1

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import torch
 
-from rl.actions import Action, BROADCAST_ACTIONS
+from rl.actions import Action, NO_COVERAGE_ACTIONS
 
 MAX_HOSTS = 16
 
@@ -25,11 +25,8 @@ KNOWLEDGE_FEATURES = [
     "is_root",
 ]
 
-# Broadcast actions (DO_NOTHING, SCAN_NETWORK) aren't tracked per-host — mark_tried()
-# is only called with a resolved host IP, which broadcast actions never have (see
-# Environment._resolve_host). Including them here would leave two always-zero columns.
 COVERAGE_FEATURES = [
-    f"tried_{action.name.lower()}" for action in Action if action not in BROADCAST_ACTIONS
+    f"tried_{action.name.lower()}" for action in Action if action not in NO_COVERAGE_ACTIONS
 ]
 
 ALL_FEATURES = KNOWLEDGE_FEATURES + COVERAGE_FEATURES
@@ -94,6 +91,16 @@ class EpisodeState:
             feat: bool(vec[FEATURE_INDEX[feat]])
             for feat in KNOWLEDGE_FEATURES
         }
+
+    def remove(self, ip: str) -> None:
+        """Remove a solved host from the pool (ADR 014: hosts leave the pool on
+        success rather than being renamed or reused — prevents farming the same
+        EXPLOIT_REWARD by re-engaging an already-compromised host)."""
+        if ip not in self._hosts:
+            return
+        slot = self._host_slots.pop(ip)
+        del self._hosts[ip]
+        self._available_slots.append(slot)
 
     def known_hosts(self) -> list[str]:
         """Return known host IPs sorted by their assigned tensor slot."""

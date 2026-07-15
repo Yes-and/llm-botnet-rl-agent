@@ -1,11 +1,9 @@
 import pytest
-from rl.actions import Action, BROADCAST_ACTIONS, is_valid
+from rl.actions import Action, is_valid
 
 
-def test_broadcast_actions_always_valid():
-    empty = {}
-    for action in BROADCAST_ACTIONS:
-        assert is_valid(action, empty)
+def test_abandon_always_valid():
+    assert is_valid(Action.ABANDON, {})
 
 
 def test_scan_ports_requires_alive():
@@ -59,13 +57,23 @@ def test_probe_mongo_requires_port():
 
 
 def test_all_actions_covered():
+    """Every action must have a matching is_valid() case. BRUTE_FORCE_* and
+    CONNECT_* are mutually exclusive on creds_found (see
+    test_creds_found_masks_brute_force_actions / test_connect_requires_creds_and_service),
+    so they can't share one "everything true" dict — CONNECT_* gets its own."""
     host = {
         "is_alive": True,
         "port_21_open": True, "port_22_open": True, "port_23_open": True,
         "port_80_open": True, "port_443_open": True,
         "port_6379_open": True, "port_27017_open": True,
         "service_ssh": True, "service_ftp": True, "service_telnet": True,
-        "creds_found": True,
     }
+    connect_actions = {Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET}
     for action in Action:
+        if action in connect_actions:
+            continue
         assert is_valid(action, host)
+
+    host_with_creds = {**host, "creds_found": True}
+    for action in connect_actions:
+        assert is_valid(action, host_with_creds)

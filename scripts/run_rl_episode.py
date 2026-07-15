@@ -2,8 +2,10 @@
 Run a single RL episode with a random policy.
 
 Used for smoke-testing the RL environment against a live sandbox before
-implementing the policy network. The random policy samples uniformly from
-the set of currently valid (action, host_idx) pairs each step.
+implementing the policy network. Host selection is a uniform random pick from
+the pool each engagement (ADR 014 Phase 1: the selector isn't learned yet);
+within an engagement, the action is a uniform random pick among currently
+valid actions for the active host (rl.actions.is_valid()).
 
 Usage:
     python scripts/run_rl_episode.py experiments/configs/s002-rl-001.yml
@@ -18,7 +20,7 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
-from rl.actions import Action, BROADCAST_ACTIONS, is_valid
+from rl.actions import Action, is_valid
 from rl.environment import Environment, EnvironmentConfig
 from rl.logging_setup import setup_logging
 
@@ -40,6 +42,7 @@ setup_logging(args.log_file)
 config = EnvironmentConfig(
     container_name=raw["container_name"],
     max_steps=raw.get("max_steps", 40),
+    max_engagement_steps=raw.get("max_engagement_steps", 10),
     dry_run=raw.get("dry_run", False),
     timeout=raw.get("timeout", 60),
     max_output_chars=raw.get("max_output_chars", 4000),
@@ -55,20 +58,10 @@ print(f"Log file:  {args.log_file}")
 print()
 
 
-def _random_action(env: Environment) -> tuple[Action, int]:
-    """Sample a valid (action, host_idx) pair uniformly at random."""
-    hosts = env._state.known_hosts()
-    candidates: list[tuple[Action, int]] = []
-
-    for action in BROADCAST_ACTIONS - {Action.DO_NOTHING}:
-        candidates.append((action, 0))
-
-    for i, ip in enumerate(hosts):
-        features = env._state.host_features(ip)
-        for action in Action:
-            if action not in BROADCAST_ACTIONS and is_valid(action, features):
-                candidates.append((action, i))
-
+def _random_action(env: Environment, host_ip: str) -> Action:
+    """Sample a valid action uniformly at random for the active host."""
+    features = env._state.host_features(host_ip)
+    candidates = [a for a in Action if is_valid(a, features)]
     return random.choice(candidates)
 
 
@@ -81,11 +74,20 @@ start = time.time()
 
 done = False
 while not done:
-    action, host_idx = _random_action(env)
-    _, reward, done, info = env.step(action, host_idx)
-    total_reward += reward
-    if info.get("exploit"):
-        exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
+    hosts = env._state.known_hosts()
+    if not hosts:
+        break  # pool exhausted — nothing left to engage
+    host_ip = random.choice(hosts)  # Phase 1: selector isn't learned, pick uniformly at random
+    env.start_engagement(host_ip)
+
+    engagement_done = False
+    while not engagement_done and not done:
+        action = _random_action(env, host_ip)
+        _, reward, done, info = env.interact(action)
+        total_reward += reward
+        engagement_done = info["engagement_done"]
+        if info.get("exploit"):
+            exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 
 elapsed = time.time() - start
 print()

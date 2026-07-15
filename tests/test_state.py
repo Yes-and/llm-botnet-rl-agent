@@ -1,6 +1,6 @@
 import pytest
 import torch
-from rl.actions import Action, BROADCAST_ACTIONS
+from rl.actions import Action, NO_COVERAGE_ACTIONS
 from rl.state import (
     EpisodeState,
     MAX_HOSTS,
@@ -17,11 +17,11 @@ def test_feature_index_covers_all_features():
 
 
 def test_coverage_features_cover_all_actions():
-    assert len(COVERAGE_FEATURES) == len(Action) - len(BROADCAST_ACTIONS)
+    assert len(COVERAGE_FEATURES) == len(Action) - len(NO_COVERAGE_ACTIONS)
 
 
-def test_coverage_features_exclude_broadcast_actions():
-    for action in BROADCAST_ACTIONS:
+def test_coverage_features_exclude_abandon():
+    for action in NO_COVERAGE_ACTIONS:
         assert f"tried_{action.name.lower()}" not in COVERAGE_FEATURES
 
 
@@ -108,6 +108,22 @@ def test_max_hosts_cap():
     for i in range(MAX_HOSTS + 5):
         state.set(f"10.0.0.{i + 1}", "is_alive", True)
     assert len(state.known_hosts()) == MAX_HOSTS
+
+
+def test_remove_drops_host_from_pool():
+    state = EpisodeState()
+    state.update("10.0.0.1", {"is_alive": True, "shell_access": True})
+    state.update("10.0.0.2", {"is_alive": True})
+    state.remove("10.0.0.1")
+    assert state.known_hosts() == ["10.0.0.2"]
+    assert state.get("10.0.0.1", "is_alive") is False  # gone, not just flagged
+
+
+def test_remove_unknown_host_is_a_noop():
+    state = EpisodeState()
+    state.set("10.0.0.1", "is_alive", True)
+    state.remove("10.0.0.99")  # must not raise
+    assert state.known_hosts() == ["10.0.0.1"]
 
 
 def test_reset_clears_all_hosts():

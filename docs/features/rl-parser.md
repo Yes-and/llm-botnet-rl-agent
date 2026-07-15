@@ -54,7 +54,7 @@ Detects the standard credential-found line:
 ```
 Sets `creds_found` and the relevant `service_*` feature. Does not emit an `ExploitEvent` — shell access (not credential discovery) is the exploitation event.
 
-`creds_found` doubles as the early-exit signal for `Environment.step_block()` on `BRUTE_FORCE_SSH`/`FTP`/`TELNET` (see ADR 011): since these actions never emit an `ExploitEvent`, a multi-try block would otherwise run to its full duration even after credentials were already found.
+As of ADR 014, `creds_found` also drives the policy's action mask directly (`rl/policy.py`'s `is_valid()`-based masking): once set, `BRUTE_FORCE_SSH`/`FTP`/`TELNET` mask out and the matching `CONNECT_*` action unmasks, so the next interaction step is structurally steered toward using the credentials rather than re-brute-forcing. (Pre-ADR-014, this same signal was instead used as an early-exit condition inside `Environment.step_block()`'s multi-try loop — that mechanism is retired; every interaction step is a single primitive command now, so there's no multi-try block to exit early from.)
 
 ## redis-cli
 

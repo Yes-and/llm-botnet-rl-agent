@@ -125,3 +125,15 @@ The selector is the part most likely to fail: under REINFORCE it gets only a han
 | Section | What would change |
 |---|---|
 | Triage as within-episode host-prioritization | Relocated to the selector (host head): triage is choosing not to re-engage unproductive hosts, learned from engagement-scoped return. |
+
+## Phase 1 implementation notes
+
+Appended during initial Phase 1 implementation on a feature branch (status still Proposed — these are choices made while building, not a decision to Accept). Resolves several of the "Open questions" above for Phase 1 specifically; Phase 2 may revisit.
+
+- **`DO_NOTHING` retired**, not just `SCAN_NETWORK`. With the scripted scan always populating the pool before any policy decision, engagement mode always has an active host — `DO_NOTHING`'s original purpose (filler before any host existed) no longer applies, and `ABANDON` already covers "not worth pursuing."
+- **`ABANDON` is mechanical, not LLM-driven** — no instruction sent, no command issued. It's a control-flow decision about episode structure, not a shell task. Still costs `-0.1` and one step-budget unit (resolves the "exact ABANDON cost" open question for Phase 1: selection is free, `ABANDON` costs like any interaction step).
+- **Action masking reuses `rl/actions.py`'s `is_valid()`** (previously only used by the random policy in `scripts/run_rl_episode.py`) rather than the narrower creds_found-only mask the pre-ADR-014 policy had. This gives the "equally likely with nothing known, narrows as the engagement learns" behavior for free — right after discovery, `is_valid()` only passes recon actions and `ABANDON`; each subsequent discovery unmasks the actions it enables.
+- **`PROBE_HTTP` has no matching parser branch** (`rl/parser.py` never emits a state update or exploit for it) — a pre-existing gap, not introduced by this refactor. Left in the Phase 1 action space rather than removed: `is_valid()` masks it out on any host that never reports port 80/443 open, and no current scenario target has an HTTP exploit path, so the gap is masked into irrelevance rather than fixed. Revisit if a future scenario adds an HTTP-vulnerable target.
+- **Phase 1 host selection is uniform random** each time an engagement ends (not round-robin) — simplest placeholder, no state to track, since it's replaced wholesale by the learned host head in Phase 2.
+- **Safety cap default: `max_engagement_steps = 10`**, exposed as an `EnvironmentConfig`/YAML field — a starting guess, easy to retune from data rather than logic.
+- **Transcript logging** (`train.transcript.log`, see `docs/features/logging.md`) was added alongside this refactor to measure a related risk before deciding whether to address it: the RL action is only a label on a natural-language instruction, and nothing enforces that the LLM's actual command matches it. Rather than building an enforcement gate speculatively, Phase 1 ships with a human-readable per-step transcript (sampled action next to the model's reasoning and actual command) so action/command mismatch can be measured from real runs first.

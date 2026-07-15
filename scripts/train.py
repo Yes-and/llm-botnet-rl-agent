@@ -34,6 +34,7 @@ from rl.policy import Policy
 load_dotenv()
 
 logger = logging.getLogger("rl.train")
+transcript_logger = logging.getLogger("rl.transcript")
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
@@ -207,6 +208,7 @@ run_start = time.time()
 for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
     ep_start = time.time()
     state = env.reset()
+    transcript_logger.info("═══════════════ Episode %d ═══════════════", episode)
 
     log_probs: list[torch.Tensor] = []
     rewards: list[float] = []

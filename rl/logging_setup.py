@@ -1,11 +1,17 @@
 """
 Logging configuration for training and evaluation runs.
 
-Console (stdout):  INFO from rl.* only — one clean line per step, no noise.
-train.log:         INFO from rl.* and agent.* — step lines, episode summaries,
-                   warnings, errors. Small; always written.
-train.debug.log:   DEBUG from all loggers — full audit trail including raw LLM
-                   request/response payloads. Large; open only when debugging.
+Console (stdout):     INFO from rl.* only — one clean line per step, no noise.
+train.log:            INFO from rl.* and agent.* — step lines, episode summaries,
+                      warnings, errors. Small; always written.
+train.transcript.log: One human-readable block per interaction step — sampled
+                      action, model thinking, issued command, output, reward. This
+                      is the artifact for auditing whether the LLM's command matched
+                      the RL action it was told to perform. Written by the rl.transcript
+                      logger, which does not propagate (so these blocks stay out of the
+                      other three streams).
+train.debug.log:      DEBUG from all loggers — full audit trail including raw LLM
+                      request/response payloads. Large; open only when debugging.
 
 Call setup_logging() once at the entry point (scripts/train.py, etc.) before
 any Environment is constructed.
@@ -49,3 +55,12 @@ def setup_logging(log_file: str = "run.log") -> None:
     root.addHandler(console)
     root.addHandler(fh)
     root.addHandler(fh_debug)
+
+    # Transcript: its own file, its own logger, propagate=False so the multi-line
+    # per-step blocks don't leak into the console/train.log/debug streams above.
+    transcript = logging.getLogger("rl.transcript")
+    transcript.propagate = False
+    th = logging.FileHandler(log_file.replace(".log", ".transcript.log"))
+    th.setLevel(logging.INFO)
+    th.setFormatter(logging.Formatter("%(asctime)s | %(message)s"))
+    transcript.addHandler(th)

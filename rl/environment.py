@@ -26,6 +26,9 @@ from rl.reward import RewardCalculator
 from rl.state import EpisodeState
 
 logger = logging.getLogger(__name__)
+transcript_logger = logging.getLogger("rl.transcript")  # human-readable per-step audit stream
+
+_TRANSCRIPT_OUTPUT_CHARS = 600  # snippet length in the transcript; full output is in messages/debug log
 
 _INITIAL_TASK = (
     "You are operating on a private internal network. "
@@ -104,6 +107,30 @@ class Environment:
         self._step_count = 0
         logger.info("=== Episode reset ===")
         return self._state.to_tensor()
+
+    def _log_transcript(
+        self, action: Action, ip: str | None, reward: float, *,
+        reasoning: str = "", content: str = "", command: str = "",
+        output: str = "", exploit: Any = None, skip: str | None = None,
+    ) -> None:
+        """Emit one human-readable block to the transcript stream, pairing the RL
+        action with what the LLM actually reasoned and ran — the artifact for
+        auditing action/command mismatch."""
+        if skip:
+            transcript_logger.info(
+                "── Step %d  action=%s  host=%s  reward=%+.1f  SKIP=%s",
+                self._step_count, action.name, ip or "-", reward, skip,
+            )
+            return
+        thinking = reasoning or content or "(none)"
+        snippet = output if len(output) <= _TRANSCRIPT_OUTPUT_CHARS else output[:_TRANSCRIPT_OUTPUT_CHARS] + " …[truncated]"
+        exploit_str = f"  exploit={exploit.vulnerability}" if exploit else ""
+        transcript_logger.info(
+            "── Step %d  action=%s  host=%s  reward=%+.1f%s\n"
+            "   thinking: %s\n   command: %s\n   output: %s",
+            self._step_count, action.name, ip or "-", reward, exploit_str,
+            thinking, command, snippet,
+        )
 
     @staticmethod
     def _host_label(action: Action, ip: str | None) -> str:
@@ -226,6 +253,7 @@ class Environment:
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward, skip,
             )
+            self._log_transcript(action, ip, reward, skip=skip)
             return reward, {"step": self._step_count, "skip": skip}
         except Exception as exc:
             self._messages.pop()
@@ -237,6 +265,7 @@ class Environment:
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
+            self._log_transcript(action, ip, reward, skip="unexpected_error")
             return reward, {"step": self._step_count, "skip": "unexpected_error"}
 
         self._messages.append(request.assistant_message)
@@ -295,6 +324,11 @@ class Environment:
             self._step_count, self.config.max_steps,
             action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             f"  exploit={exploit.vulnerability}" if exploit else "",
+        )
+        self._log_transcript(
+            action, ip, reward,
+            reasoning=request.reasoning, content=request.assistant_message["content"],
+            command=request.command, output=result.output, exploit=exploit,
         )
         return reward, info
 

@@ -13,6 +13,7 @@ class CommandRequest:
     command: str
     tool_call_id: str
     assistant_message: dict[str, Any]
+    reasoning: str = ""  # model's thinking trace, if the model emits one (empty otherwise)
 
 
 def build_initial_messages(task: str) -> list[dict]:
@@ -51,9 +52,14 @@ class LLMClient:
         args = json.loads(tool_call.function.arguments)
         if not isinstance(args, dict) or "command" not in args:
             raise ValueError(f"Malformed tool call arguments: {tool_call.function.arguments!r}")
+        # Reasoning models surface the thinking trace in a separate field, not in
+        # .content (Kimi-style models put their rationale in .content instead). Grab
+        # whichever exists so the transcript log can show the model's reasoning.
+        reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None) or ""
         return CommandRequest(
             command=args["command"],
             tool_call_id=tool_call.id,
+            reasoning=reasoning,
             assistant_message={
                 "role": "assistant",
                 "content": message.content or "",

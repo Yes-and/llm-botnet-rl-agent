@@ -11,15 +11,16 @@ from rl.parser import parse_step
 
 NMAP_CASES = [
     pytest.param(
-        # step 2: host discovery, timed out (exit 124) — partial output still valid
+        # step 2: host discovery, timed out (exit 124) — partial output still valid.
+        # .1 has no reverse-DNS hostname — Docker gateway noise, not a real container.
         "nmap -sn 172.18.0.0/16 -oG -",
         124,
         "Host: 172.18.0.1 ()\tStatus: Up\n"
         "Host: 172.18.0.2 (s002_mongodb)\tStatus: Up\n"
         "Host: 172.18.0.3 (s002_ssh)\tStatus: Up\n",
-        {"172.18.0.1": {"is_alive": True},
-         "172.18.0.2": {"is_alive": True},
+        {"172.18.0.2": {"is_alive": True},
          "172.18.0.3": {"is_alive": True}},
+        {"172.18.0.1"},
         id="host-discovery-timeout",
     ),
     pytest.param(
@@ -35,6 +36,7 @@ NMAP_CASES = [
         {"172.18.0.3": {"is_alive": True, "port_22_open": True, "service_ssh": True},
          "172.18.0.4": {"is_alive": True, "port_21_open": True, "service_ftp": True},
          "172.18.0.6": {"is_alive": True, "port_23_open": True, "service_telnet": True}},
+        set(),
         id="port-scan-known-services",
     ),
     pytest.param(
@@ -47,19 +49,33 @@ NMAP_CASES = [
         "Host: 172.18.0.5 (s002_redis)\tPorts: 6379/open/tcp//redis///\tIgnored State: closed (65534)\n",
         {"172.18.0.2": {"is_alive": True, "port_27017_open": True},
          "172.18.0.5": {"is_alive": True, "port_6379_open": True}},
+        set(),
         id="full-scan-redis-mongo",
     ),
     pytest.param(
-        # host with no open ports still marked alive
+        # a real host with no open ports is still marked alive
+        "nmap -sV -F 172.18.0.7 -oG -",
+        0,
+        "Host: 172.18.0.7 (s002_hardened)\tStatus: Up\n"
+        "Host: 172.18.0.7 (s002_hardened)\tPorts: \tIgnored State: closed (100)\n",
+        {"172.18.0.7": {"is_alive": True}},
+        set(),
+        id="host-alive-no-ports",
+    ),
+    pytest.param(
+        # no reverse-DNS hostname at all (empty parens, no ports line either) — pure
+        # Docker gateway noise, must not be registered as a host under any feature.
         "nmap -sV -F 172.18.0.1 -oG -",
         0,
         "Host: 172.18.0.1 ()\tStatus: Up\n"
         "Host: 172.18.0.1 ()\tPorts: \tIgnored State: closed (100)\n",
-        {"172.18.0.1": {"is_alive": True}},
-        id="host-alive-no-ports",
+        {},
+        {"172.18.0.1"},
+        id="gateway-excluded-no-hostname",
     ),
     pytest.param(
-        # human-readable format, exit 0 — real output from run.log step 3
+        # human-readable format, exit 0 — real output from run.log step 3.
+        # .1 has no hostname prefix — Docker gateway, not a real container.
         "nmap -sn 172.18.0.0/24",
         0,
         "Starting Nmap 7.93 ( https://nmap.org ) at 2026-06-05 11:34 UTC\n"
@@ -70,9 +86,9 @@ NMAP_CASES = [
         "Nmap scan report for s002_ssh.scenario-002_s002_net (172.18.0.3)\n"
         "Host is up (0.000023s latency).\n"
         "Nmap done: 256 IP addresses (3 hosts up) scanned in 1.97 seconds\n",
-        {"172.18.0.1": {"is_alive": True},
-         "172.18.0.2": {"is_alive": True},
+        {"172.18.0.2": {"is_alive": True},
          "172.18.0.3": {"is_alive": True}},
+        {"172.18.0.1"},
         id="host-discovery-human-readable",
     ),
     pytest.param(
@@ -85,21 +101,23 @@ NMAP_CASES = [
         "Nmap scan report for s002_mongodb.scenario-002_s002_net (172.18.0.2)\n"
         "Host is up (0.000036s latency).\n"
         "[TIMEOUT] Command exceeded 60s and was killed.\n",
-        {"172.18.0.1": {"is_alive": True},
-         "172.18.0.2": {"is_alive": True}},
+        {"172.18.0.2": {"is_alive": True}},
+        {"172.18.0.1"},
         id="host-discovery-human-readable-timeout",
     ),
 ]
 
 
-@pytest.mark.parametrize("command,exit_code,output,expected_updates", NMAP_CASES)
-def test_nmap(command, exit_code, output, expected_updates):
+@pytest.mark.parametrize("command,exit_code,output,expected_updates,expected_absent", NMAP_CASES)
+def test_nmap(command, exit_code, output, expected_updates, expected_absent):
     result = parse_step(command, output, exit_code)
     updates = dict(result.state_updates)
     for ip, feats in expected_updates.items():
         assert ip in updates, f"{ip} not in updates"
         for feat, val in feats.items():
             assert updates[ip].get(feat) == val, f"{ip}.{feat} expected {val}"
+    for ip in expected_absent:
+        assert ip not in updates, f"{ip} should be excluded (no reverse-DNS hostname — Docker infra noise)"
     assert result.exploit is None
 
 

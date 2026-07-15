@@ -26,7 +26,9 @@ obs, reward, done, info = env.interact(action)
 
 `reset()` auto-runs a fixed instruction ("Discover all live hosts on the local subnet") through the normal LLM → executor → parser pipeline, *before* any policy decision and outside the step budget/reward accounting entirely. This is not a hardcoded `nmap` invocation — the environment has no notion of the sandbox's subnet CIDR, and the LLM already knows how to discover its own network. What's scripted is *that* it runs unconditionally, not *how* it runs.
 
-Failure here (LLM error, timeout) is a hard `RuntimeError`, not a skip: an empty host pool would silently waste the entire episode, so the failure must surface immediately rather than being absorbed.
+The scan loops across up to `_INITIAL_SCAN_MAX_TRIES` (4) exchanges rather than accepting a single shot: a reasonable agent's first move for "discover the subnet" is often checking its own network config (`ip addr`) before running the actual scan, so one exchange frequently finds zero hosts without anything being wrong. On an empty result, a follow-up instruction nudges the LLM to run the actual scan; the loop returns as soon as any host is discovered. (Found the hard way: an early smoke test's first LLM turn was `ip addr show`, which — under the original single-shot version — silently produced a 0-host episode with no error at all.)
+
+Failure is a hard `RuntimeError`, not a skip, but only once every attempt has come back empty (or the LLM/API call itself fails) — an empty host pool would silently waste the entire episode, so it must surface loudly rather than being absorbed.
 
 `SCAN_NETWORK` is no longer a learned action — recon-of-the-subnet is not the capability under test (ADR 014). Per-host recon (`SCAN_PORTS`, `PROBE_PORT`) remains a learned interaction action.
 

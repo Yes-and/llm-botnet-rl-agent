@@ -47,44 +47,91 @@ def env_mocks():
         mock_llm = mock_llm_cls.return_value
         mock_exec = mock_exec_cls.return_value
         mock_exec.execute.return_value = _res()  # exit_code=0 satisfies reachability probe
-        # The scripted scan runs inside reset(); default it to an empty-output nmap
-        # command so tests start from a known empty pool unless they override it.
+        # The scripted scan now retries until it finds a host (see
+        # test_reset_retries_scan_until_hosts_found) rather than accepting an empty
+        # result — give it one to find on the first try so fixture-level reset()
+        # succeeds without looping, then remove it immediately so tests still start
+        # from a clean, empty pool.
         mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+        mock_exec.execute.return_value = _res("Host: 172.18.0.250 (fixture_host)\tStatus: Up\n")
         env = Environment(EnvironmentConfig(container_name="test", max_steps=5, max_engagement_steps=3))
         env.reset()
+        env._state.remove("172.18.0.250")
         mock_exec.reset_mock()
         mock_llm.reset_mock()
+        mock_exec.execute.return_value = _res()  # neutral default for per-test interact() calls
         yield env, mock_llm, mock_exec
 
 
 # ── reset() / scripted initial scan ────────────────────────────────────────────
 
-def test_reset_returns_zero_tensor_when_scan_finds_nothing(env_mocks):
-    env, _, _ = env_mocks
+def test_reset_returns_correctly_shaped_tensor(env_mocks):
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+    mock_exec.execute.return_value = _res("Host: 172.18.0.5 (target_host)\tStatus: Up\n")
+
     obs = env.reset()
+
     assert isinstance(obs, torch.Tensor)
     assert obs.shape == (MAX_HOSTS, NUM_FEATURES)
-    assert obs.sum().item() == 0.0
 
 
 def test_reset_clears_state_from_previous_episode(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     env._state.update("172.18.0.5", {"is_alive": True})
-    assert env._state.known_hosts() != []
-    obs = env.reset()
-    assert env._state.known_hosts() == []
-    assert obs.sum().item() == 0.0
+    assert "172.18.0.5" in env._state.known_hosts()
+
+    mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
+    mock_exec.execute.return_value = _res("Host: 172.18.0.77 (target_host)\tStatus: Up\n")
+    env.reset()
+
+    assert "172.18.0.5" not in env._state.known_hosts()  # stale state cleared, not merged
+    assert "172.18.0.77" in env._state.known_hosts()      # fresh scan's result is what's there now
 
 
 def test_reset_runs_scripted_scan_and_discovers_hosts(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
-    mock_exec.execute.return_value = _res("Host: 172.18.0.5 ()\tStatus: Up\n")
+    mock_exec.execute.return_value = _res("Host: 172.18.0.5 (target_host)\tStatus: Up\n")
 
     env.reset()
 
     assert "172.18.0.5" in env._state.known_hosts()
     mock_llm.complete.assert_called_once()
+
+
+def test_reset_retries_scan_until_hosts_found(env_mocks):
+    """A reasonable agent's first move for 'discover the subnet' is often checking
+    its own network config before running the actual scan — that must not be
+    treated as a failed/empty scan. Reproduces the exact shape of a real run: first
+    exchange is `ip addr`, second is the actual nmap call."""
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.side_effect = [
+        _req("ip addr show | grep -A2 'inet '"),
+        _req("nmap -sn 172.18.0.0/24 -oG -"),
+    ]
+    mock_exec.execute.side_effect = [
+        _res(),                                                    # echo ok reachability probe
+        _res("eth0: inet 172.18.0.50/24 ..."),                     # scan attempt 1 — no host match
+        _res("Host: 172.18.0.60 (target_host)\tStatus: Up\n"),     # scan attempt 2 — the actual scan
+    ]
+
+    env.reset()
+
+    assert "172.18.0.60" in env._state.known_hosts()
+    assert mock_llm.complete.call_count == 2
+
+
+def test_reset_raises_when_scan_never_finds_hosts(env_mocks):
+    """If every attempt comes back empty, that's a real problem (bad subnet guess,
+    unreachable network) — must surface as a hard error, not silently proceed with
+    an empty pool that would waste the whole episode."""
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.return_value = _req("ip addr show")  # never actually scans
+    mock_exec.execute.return_value = _res("eth0: inet 172.18.0.50/24 ...")
+
+    with pytest.raises(RuntimeError, match="found no hosts"):
+        env.reset()
 
 
 def test_reset_raises_on_scan_llm_failure(env_mocks):
@@ -226,10 +273,11 @@ def test_safety_cap_ends_engagement_without_exploit():
          patch("rl.environment.Executor") as mock_exec_cls:
         mock_llm = mock_llm_cls.return_value
         mock_exec = mock_exec_cls.return_value
-        mock_exec.execute.return_value = _res()
+        mock_exec.execute.return_value = _res("Host: 172.18.0.250 (fixture_host)\tStatus: Up\n")
         mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
         env = Environment(EnvironmentConfig(container_name="test", max_steps=40, max_engagement_steps=2))
         env.reset()
+        env._state.remove("172.18.0.250")
         env._state.update("172.18.0.5", {"is_alive": True, "port_22_open": True})
         env.start_engagement("172.18.0.5")
         mock_llm.complete.return_value = _req("hydra -l admin -P wordlist.txt ssh://172.18.0.5")
@@ -266,7 +314,7 @@ def test_skip_still_counts_against_safety_cap():
          patch("rl.environment.Executor") as mock_exec_cls:
         mock_llm = mock_llm_cls.return_value
         mock_exec = mock_exec_cls.return_value
-        mock_exec.execute.return_value = _res()
+        mock_exec.execute.return_value = _res("Host: 172.18.0.250 (fixture_host)\tStatus: Up\n")
         mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
         env = Environment(EnvironmentConfig(container_name="test", max_steps=40, max_engagement_steps=2))
         env.reset()

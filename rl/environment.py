@@ -44,6 +44,14 @@ _INITIAL_TASK = (
 # CIDR, and the LLM already knows how to discover its own network. What's scripted is
 # *that* it runs, unconditionally, before any policy decision — not *how* it runs.
 _INITIAL_SCAN_INSTRUCTION = "Discover all live hosts on the local subnet."
+_INITIAL_SCAN_FOLLOWUP = (
+    "That did not discover any live hosts yet. Run the actual network scan "
+    "(e.g. nmap) against your subnet now to find them."
+)
+# A reasonable agent's first move for "discover the subnet" is often checking its own
+# network config (e.g. `ip addr`) before running the actual scan — that's expected
+# behavior, not a failure, so a single exchange isn't enough to call this done or failed.
+_INITIAL_SCAN_MAX_TRIES = 4
 
 # Single source of truth for the default context_window — scripts/train.py imports this
 # rather than hardcoding its own number, so the two can't silently drift apart.
@@ -177,25 +185,48 @@ class Environment:
 
     def _scripted_initial_scan(self) -> None:
         """Auto-run at reset() to populate the host pool. Not a policy decision and
-        not part of the step budget or reward (ADR 014). Failure here is a hard
-        error, not a skip: an empty pool means no engagement is possible for the
-        whole episode, so absorbing the failure would silently waste the run."""
-        self._messages.append({"role": "user", "content": _INITIAL_SCAN_INSTRUCTION})
-        try:
-            request = self._client.complete(self._messages)
-        except (ValueError, openai.APITimeoutError) as exc:
-            raise RuntimeError(f"Scripted initial scan failed: {exc}") from exc
-        self._messages.append(request.assistant_message)
-        result = self._executor.execute(request.command)
-        self._messages.append({
-            "role": "tool",
-            "tool_call_id": request.tool_call_id,
-            "content": format_tool_result(result),
-        })
-        parsed = parse_step(request.command, result.output, result.exit_code)
-        for host_ip, features in parsed.state_updates:
-            self._state.update(host_ip, features)
-        logger.info("Initial scan: discovered %d host(s)", len(self._state.known_hosts()))
+        not part of the step budget or reward (ADR 014).
+
+        Loops up to _INITIAL_SCAN_MAX_TRIES exchanges rather than a single shot: a
+        reasonable agent's first move for "discover the subnet" is often checking
+        its own network config before running the actual scan, so one exchange
+        frequently finds zero hosts without anything being wrong — nudge with a
+        follow-up and try again. Only raises once every attempt has found nothing;
+        that's a hard error, not a skip, since an empty pool means no engagement is
+        possible for the whole episode and absorbing the failure would silently
+        waste the run.
+        """
+        instruction = _INITIAL_SCAN_INSTRUCTION
+        for attempt in range(1, _INITIAL_SCAN_MAX_TRIES + 1):
+            self._messages.append({"role": "user", "content": instruction})
+            try:
+                request = self._client.complete(self._messages)
+            except (ValueError, openai.APITimeoutError) as exc:
+                raise RuntimeError(f"Scripted initial scan failed: {exc}") from exc
+            self._messages.append(request.assistant_message)
+            result = self._executor.execute(request.command)
+            self._messages.append({
+                "role": "tool",
+                "tool_call_id": request.tool_call_id,
+                "content": format_tool_result(result),
+            })
+            parsed = parse_step(request.command, result.output, result.exit_code)
+            for host_ip, features in parsed.state_updates:
+                self._state.update(host_ip, features)
+
+            if self._state.known_hosts():
+                logger.info(
+                    "Initial scan: discovered %d host(s) (attempt %d/%d)",
+                    len(self._state.known_hosts()), attempt, _INITIAL_SCAN_MAX_TRIES,
+                )
+                return
+            instruction = _INITIAL_SCAN_FOLLOWUP
+
+        raise RuntimeError(
+            f"Scripted initial scan found no hosts after {_INITIAL_SCAN_MAX_TRIES} attempts. "
+            "Check train.debug.log for the commands the LLM ran — this usually means a bad "
+            "subnet guess or the sandbox network isn't reachable, not an LLM API failure."
+        )
 
     def _try_once(self, action: Action, ip: str) -> tuple[float, dict[str, Any]]:
         """Execute a single primitive command for (action, ip). Returns (reward, info)."""

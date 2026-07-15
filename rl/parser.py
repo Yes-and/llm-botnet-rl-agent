@@ -37,20 +37,24 @@ _PORT_MAP: dict[int, tuple[str, str | None]] = {
 
 # ── Compiled regexes ──────────────────────────────────────────────────────────
 
-# nmap grepable: "Host: 1.2.3.4 (hostname)  Status: Up"
+# nmap grepable: "Host: 1.2.3.4 (hostname)  Status: Up" — hostname is captured (not just
+# matched) so _parse_nmap can tell a real container (Docker Compose DNS name) apart from
+# Docker network infrastructure (gateway, etc.), which never gets a reverse-DNS entry and
+# shows empty parens instead.
 _NMAP_HOST_UP = re.compile(
-    r"^Host:\s+([\d.]+)\s+\(.*?\)\s+Status:\s+Up", re.MULTILINE
+    r"^Host:\s+([\d.]+)\s+\((.*?)\)\s+Status:\s+Up", re.MULTILINE
 )
 # nmap grepable: "Host: 1.2.3.4 (hostname)  Ports: 22/open/tcp//ssh//version/ ..."
 _NMAP_PORTS_LINE = re.compile(
-    r"^Host:\s+([\d.]+)\s+\(.*?\)\s+Ports:\s+(.+)", re.MULTILINE
+    r"^Host:\s+([\d.]+)\s+\((.*?)\)\s+Ports:\s+(.+)", re.MULTILINE
 )
 # individual port entry within the Ports field: "22/open/tcp//ssh//version/"
 _NMAP_PORT_ENTRY = re.compile(r"(\d+)/open/\w+//(\w*)")
 
 # nmap human-readable (no -oG): "Nmap scan report for [hostname (]1.2.3.4[)]" + "Host is up"
+# hostname (group 1, optional) captured for the same reverse-DNS-noise filtering as above.
 _NMAP_REPORT_UP = re.compile(
-    r"^Nmap scan report for (?:\S.*?\()?([\d.]+)\)?\s*\nHost is up",
+    r"^Nmap scan report for (?:(\S.*?)\s*\()?([\d.]+)\)?\s*\nHost is up",
     re.MULTILINE,
 )
 
@@ -107,16 +111,25 @@ def _parse_nmap(output: str) -> ParseResult:
     # Parse regardless of exit code — timed-out scans still produce partial output.
     updates: dict[str, dict[str, bool]] = {}
 
-    # Greppable format (-oG -)
+    # Greppable format (-oG -). A host with no reverse-DNS hostname (empty parens) is
+    # Docker network infrastructure (the bridge gateway, typically the subnet's .1
+    # address) rather than a real scenario container — Compose containers always
+    # resolve to their service DNS name. Skip it: it can never be exploited, and under
+    # ADR 014's single-host engagement it would otherwise get repeatedly re-engaged
+    # (nothing ever removes it from the pool) burning real steps for nothing.
     for m in _NMAP_HOST_UP.finditer(output):
-        ip = m.group(1)
+        ip, hostname = m.group(1), m.group(2)
+        if not hostname:
+            continue
         updates.setdefault(ip, {})["is_alive"] = True
 
     for m in _NMAP_PORTS_LINE.finditer(output):
-        ip = m.group(1)
+        ip, hostname, ports = m.group(1), m.group(2), m.group(3)
+        if not hostname:
+            continue
         feats = updates.setdefault(ip, {})
         feats["is_alive"] = True
-        for pm in _NMAP_PORT_ENTRY.finditer(m.group(2)):
+        for pm in _NMAP_PORT_ENTRY.finditer(ports):
             port = int(pm.group(1))
             if port in _PORT_MAP:
                 port_feat, svc_feat = _PORT_MAP[port]
@@ -126,7 +139,9 @@ def _parse_nmap(output: str) -> ParseResult:
 
     # Human-readable format (no -oG flag)
     for m in _NMAP_REPORT_UP.finditer(output):
-        ip = m.group(1)
+        hostname, ip = m.group(1), m.group(2)
+        if not hostname:
+            continue
         updates.setdefault(ip, {})["is_alive"] = True
 
     return ParseResult(state_updates=list(updates.items()))

@@ -122,6 +122,21 @@ def test_to_tensor_slot_consistent_with_known_hosts():
     assert t[slot_of_1, FEATURE_INDEX["port_22_open"]] == 0.0
 
 
+def test_to_tensor_normalizes_tried_counts():
+    """tried_* is a raw 0..MAX_TRIED_COUNT count in _hosts, but must be scaled to
+    0..1 in the tensor — everything else the network sees is already that scale,
+    and an unscaled count would dominate boolean features in the same dot product."""
+    from rl.state import MAX_TRIED_COUNT
+
+    state = EpisodeState()
+    state.set("10.0.0.1", "is_alive", True)
+    for _ in range(MAX_TRIED_COUNT):
+        state.mark_tried("10.0.0.1", Action.SCAN_PORTS)
+    t = state.to_tensor()
+    assert t[0, FEATURE_INDEX["tried_scan_ports"]] == 1.0
+    assert t[0, FEATURE_INDEX["is_alive"]] == 1.0
+
+
 def test_to_tensor_unused_slots_are_zero():
     state = EpisodeState()
     state.set("10.0.0.1", "is_alive", True)

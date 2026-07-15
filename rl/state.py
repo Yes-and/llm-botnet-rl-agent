@@ -45,6 +45,7 @@ COVERAGE_FEATURES = [
 ALL_FEATURES = KNOWLEDGE_FEATURES + COVERAGE_FEATURES
 NUM_FEATURES = len(ALL_FEATURES)
 FEATURE_INDEX = {name: i for i, name in enumerate(ALL_FEATURES)}
+_COVERAGE_INDICES = [FEATURE_INDEX[f] for f in COVERAGE_FEATURES]
 
 
 @dataclass
@@ -133,10 +134,16 @@ class EpisodeState:
         Return state as a float tensor of shape [MAX_HOSTS, NUM_FEATURES].
         Hosts fill rows 0..n-1 in slot order; unused rows are zero-padded.
         Slot values are sort keys only — they are not used as absolute row indices.
+
+        tried_* columns are scaled to 0..1 (raw count / MAX_TRIED_COUNT) here, at
+        the boundary where state becomes network input — every other feature is
+        already 0/1 or 0..1, and an unscaled count up to MAX_TRIED_COUNT would
+        dominate those in the same dot product. _hosts keeps the raw count.
         """
         matrix = torch.zeros(MAX_HOSTS, NUM_FEATURES)
         for i, ip in enumerate(self.known_hosts()):
             matrix[i] = torch.tensor(self._hosts[ip])
+        matrix[:, _COVERAGE_INDICES] /= MAX_TRIED_COUNT
         return matrix
 
     def reset(self) -> None:

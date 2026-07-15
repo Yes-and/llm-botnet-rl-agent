@@ -63,6 +63,8 @@ Two `rl/state.py` features give the policy richer signal than the original ADR 0
 
 `EpisodeState.set()` accepts `bool | float` now (not just `bool`) to support `engagement_progress`'s real-valued range — booleans still coerce via `float(True) == 1.0`, unchanged for every other feature.
 
+`EpisodeState.to_tensor()` scales the `tried_*` columns to 0..1 (raw count / `MAX_TRIED_COUNT`) before returning — the policy network has no normalization layer, so an unscaled count up to 5 next to 0/1 flags in the same `Linear` input would dominate them. `mark_tried()`, `get()`, and `host_features()` all still see the raw, unscaled count; only the tensor consumed by `rl/policy.py` is normalized.
+
 ## Config
 
 ```python

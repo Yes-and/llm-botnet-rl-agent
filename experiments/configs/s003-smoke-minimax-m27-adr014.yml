@@ -16,7 +16,6 @@ timeout: 60
 api_timeout: 60
 max_output_chars: 4000
 dry_run: false
-context_window: 5
 
 # --- Seeds ---
 seed_python: 42

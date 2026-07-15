@@ -27,7 +27,8 @@ while not episode done:
     if pool is empty: break                       # nothing left to engage
 
     host_ip = random.choice(known_hosts)           # Phase 1: selector not learned
-    env.start_engagement(host_ip)
+    env.start_engagement(host_ip)                  # zeros engagement_progress for host_ip in-place
+    state = env._state.to_tensor()                 # refresh — start_engagement() mutates state, not the last tensor
     host_idx = known_hosts.index(host_ip)
 
     while not engagement done and not episode done:
@@ -42,6 +43,8 @@ while not episode done:
 At episode end: `_compute_returns(engagement_rewards, gamma)` → one gradient update over the concatenated trajectory.
 
 A skipped interaction step (LLM error, timeout) is excluded from the trajectory (`if not skip:`) exactly as before ADR 014 — it contributes no `log_prob`/reward and doesn't end the engagement, though it still counts against the per-engagement safety cap (see `docs/features/rl-environment.md`).
+
+**The `state = env._state.to_tensor()` refresh after `start_engagement()` is required, not cosmetic.** Found 2026-07-15 alongside the `tried_*` normalization fix. Without it, the first `policy.sample()` call of an engagement uses the tensor left over from the *previous* engagement's last `interact()` — correct for every feature except `engagement_progress`, which `start_engagement()` just zeroed in `EpisodeState` directly, in place, without producing a new tensor. On a fresh (never-engaged) host this is invisible, since an untouched row is already all-zero. On a *re*-engagement (a host that hit `ABANDON` or the safety cap earlier in the same episode, so it's still in the pool), the stale tensor shows whatever `engagement_progress` that host had when its last engagement ended — often near 1.0 — right as a fresh engagement with a full budget begins. That biases the policy's very first decision on a re-engagement toward premature `ABANDON`, the opposite of what the feature was added for.
 
 ## Config
 

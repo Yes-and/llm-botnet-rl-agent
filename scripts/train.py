@@ -224,7 +224,8 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
         # Phase 1 (ADR 014): host selection isn't learned yet — pick uniformly at
         # random. Phase 2 replaces this with a trained host head.
         host_ip = random.choice(hosts)
-        env.start_engagement(host_ip)
+        env.start_engagement(host_ip)  # zeros engagement_progress in-place — refresh state below
+        state = env._state.to_tensor()
         host_idx = hosts.index(host_ip)
         engagement_count += 1
         current_rewards: list[float] = []

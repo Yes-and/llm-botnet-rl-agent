@@ -27,7 +27,7 @@ import yaml
 from dotenv import load_dotenv
 
 from rl.actions import Action
-from rl.environment import DEFAULT_CONTEXT_WINDOW, Environment, EnvironmentConfig
+from rl.environment import Environment, EnvironmentConfig
 from rl.logging_setup import setup_logging
 from rl.policy import Policy
 
@@ -80,7 +80,6 @@ env_config = EnvironmentConfig(
     timeout=raw.get("timeout", 60),
     max_output_chars=raw.get("max_output_chars", 4000),
     model=raw.get("model", "moonshotai/Kimi-K2.6"),
-    context_window=raw.get("context_window", DEFAULT_CONTEXT_WINDOW),
     api_timeout=raw.get("api_timeout", 60),
     reasoning_effort=raw.get("reasoning_effort", None),
 )
@@ -190,7 +189,7 @@ print(f"Container:   {env_config.container_name}")
 print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
 print(f"Model:       {env_config.model}")
 print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
-print(f"Engagement:  max_engagement_steps={env_config.max_engagement_steps}  context_window={env_config.context_window}")
+print(f"Engagement:  max_engagement_steps={env_config.max_engagement_steps}")
 print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}  entropy_coeff={entropy_coeff}")
 print(f"Seeds:       python={seed_python}  torch={seed_torch}")
 print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")

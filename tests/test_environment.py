@@ -159,6 +159,31 @@ def test_start_engagement_unknown_host_raises(env_mocks):
         env.start_engagement("172.18.0.99")
 
 
+def test_start_engagement_resets_message_history(env_mocks):
+    """Each engagement gets the LLM's full attention on one host, not a rolling
+    window shared across the whole episode's unrelated hosts (the cause of a real
+    bug — see rl/environment.py's start_engagement docstring). Compares against
+    env._n_header (the actual source of truth) rather than a snapshot of
+    env._messages — the fixture's own reset() already leaves a leftover scripted-
+    scan exchange in _messages, so a snapshot taken before the first
+    start_engagement() call would itself be polluted with content the reset is
+    supposed to clear."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env._state.update("172.18.0.6", {"is_alive": True})
+
+    env.start_engagement("172.18.0.5")
+    assert len(env._messages) == env._n_header  # fixture's leftover scan exchange cleared too
+
+    mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
+    mock_exec.execute.return_value = _res("")
+    env.interact(Action.SCAN_PORTS)
+    assert len(env._messages) > env._n_header  # this engagement's exchange is present
+
+    env.start_engagement("172.18.0.6")
+    assert len(env._messages) == env._n_header  # prior engagement's exchange is gone
+
+
 def test_interact_without_active_engagement_raises(env_mocks):
     env, _, _ = env_mocks
     with pytest.raises(RuntimeError, match="no active engagement"):

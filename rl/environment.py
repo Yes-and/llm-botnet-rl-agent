@@ -53,11 +53,6 @@ _INITIAL_SCAN_FOLLOWUP = (
 # behavior, not a failure, so a single exchange isn't enough to call this done or failed.
 _INITIAL_SCAN_MAX_TRIES = 4
 
-# Single source of truth for the default context_window — scripts/train.py imports this
-# rather than hardcoding its own number, so the two can't silently drift apart.
-DEFAULT_CONTEXT_WINDOW = 3
-
-
 @dataclass
 class EnvironmentConfig:
     container_name: str
@@ -67,7 +62,6 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
-    context_window: int = DEFAULT_CONTEXT_WINDOW
     api_timeout: int = 60
     reasoning_effort: str | None = None  # e.g. "none" to disable thinking on Qwen models
 
@@ -129,11 +123,30 @@ class Environment:
         return self._active_host
 
     def start_engagement(self, host_ip: str) -> None:
-        """Set the active host for the next sequence of interact() calls."""
+        """Set the active host for the next sequence of interact() calls.
+
+        Resets the LLM message history to just the system/task header — each
+        engagement gets the LLM's full attention on one host's conversation, not a
+        small rolling window sliding across the whole episode's unrelated hosts
+        (the cause of a real bug: a re-engaged host's already-open port got
+        re-verified from scratch because the window had evicted it in favor of a
+        different host's exchanges). Bounded naturally by max_engagement_steps —
+        no separate pruning needed within an engagement.
+        """
         if host_ip not in self._state.known_hosts():
             raise ValueError(f"Cannot start engagement on unknown host {host_ip!r}")
         self._active_host = host_ip
         self._engagement_step_count = 0
+        self._state.set(host_ip, "engagement_progress", 0.0)
+        self._messages = self._messages[:self._n_header]
+
+    def _update_engagement_progress(self) -> None:
+        """0..1, how far the active host's engagement is through its safety cap —
+        lets the policy sense urgency instead of treating every interaction step
+        as if it had unlimited time. Stale (not reset) on a host between
+        engagements once it's no longer active — known, accepted imprecision."""
+        progress = min(self._engagement_step_count / self.config.max_engagement_steps, 1.0)
+        self._state.set(self._active_host, "engagement_progress", progress)
 
     def interact(self, action: Action) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
         """
@@ -156,6 +169,7 @@ class Environment:
             reward = self._reward_calc.step()
             self._step_count += 1
             self._engagement_step_count += 1
+            self._update_engagement_progress()
             done = self._step_count >= self.config.max_steps
             logger.info(
                 "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f",
@@ -174,7 +188,9 @@ class Environment:
 
         exploited = info.get("exploit") is not None
         if exploited:
-            self._state.remove(ip)
+            self._state.remove(ip)  # must come after any state.set() calls on ip — remove() would be undone by re-adding
+        else:
+            self._update_engagement_progress()
 
         cap_hit = self._engagement_step_count >= self.config.max_engagement_steps
         engagement_done = exploited or cap_hit
@@ -269,7 +285,6 @@ class Environment:
             "tool_call_id": request.tool_call_id,
             "content": format_tool_result(result),
         })
-        self._prune_messages()
 
         parsed = parse_step(request.command, result.output, result.exit_code)
 
@@ -351,15 +366,6 @@ class Environment:
     @property
     def step_count(self) -> int:
         return self._step_count
-
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _prune_messages(self) -> None:
-        """Trim message history to the last context_window complete exchanges."""
-        variable = self._messages[self._n_header:]
-        max_msgs = self.config.context_window * 3
-        if len(variable) > max_msgs:
-            self._messages = self._messages[:self._n_header] + variable[-max_msgs:]
 
 # ── Action → natural-language instruction ────────────────────────────────────
 

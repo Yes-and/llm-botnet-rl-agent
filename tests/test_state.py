@@ -54,6 +54,33 @@ def test_mark_tried():
     assert state.get("10.0.0.1", "tried_probe_port") is False
 
 
+def test_mark_tried_counts_repeated_tries():
+    """tried_* is a capped count, not a flag — distinguishes 'tried once' from
+    'tried repeatedly, nothing new' (a signal for learning when to abandon)."""
+    from rl.state import FEATURE_INDEX, MAX_TRIED_COUNT
+
+    state = EpisodeState()
+    state.set("10.0.0.1", "is_alive", True)
+    for _ in range(MAX_TRIED_COUNT + 3):
+        state.mark_tried("10.0.0.1", Action.SCAN_PORTS)
+    raw_count = state._hosts["10.0.0.1"][FEATURE_INDEX["tried_scan_ports"]]
+    assert raw_count == MAX_TRIED_COUNT  # caps rather than growing unbounded
+    assert state.get("10.0.0.1", "tried_scan_ports") is True  # still truthy as "was tried"
+
+
+def test_set_accepts_float_values():
+    """set() isn't boolean-only — engagement_progress needs a real 0..1 float.
+    Note: get() truncates through bool(), so it can't round-trip the raw value
+    (0.4 reads back as True) — read _hosts directly, or via to_tensor(), for the
+    actual float."""
+    from rl.state import FEATURE_INDEX
+
+    state = EpisodeState()
+    state.set("10.0.0.1", "engagement_progress", 0.4)
+    assert state._hosts["10.0.0.1"][FEATURE_INDEX["engagement_progress"]] == 0.4
+    assert state.get("10.0.0.1", "engagement_progress") is True
+
+
 def test_host_features_returns_knowledge_only():
     state = EpisodeState()
     state.update("10.0.0.1", {"is_alive": True, "port_22_open": True})

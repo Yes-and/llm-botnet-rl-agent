@@ -54,6 +54,15 @@ Each `interact(action)` call (except `ABANDON`, below) runs:
 
 `EnvironmentConfig.max_engagement_steps` (default 10) is a ceiling, not a target length — an engagement that hits it without an exploit ends there, control returns to host selection. Skipped tries (LLM error, timeout) count against the cap too, so a run of pure API failures can't keep one engagement alive forever; unlike the episode-level `done` signal, a skip does *not* end the engagement on its own.
 
+## State: try-counts and engagement progress
+
+Two `rl/state.py` features give the policy richer signal than the original ADR 014 Phase 1 cut:
+
+- **`tried_<action>` is a capped count (`MAX_TRIED_COUNT = 5`), not a flag.** `EpisodeState.mark_tried()` increments rather than sets — the policy can distinguish "tried once" from "tried repeatedly, nothing new," relevant for learning when an action (or the host) is worth abandoning. `EpisodeState.get()` still only exposes a truthy view (`bool()`) — read `to_tensor()` or `_hosts` directly for the actual count.
+- **`engagement_progress`** (0..1) — how far the *active* host's current engagement is through its safety cap, set by `Environment._update_engagement_progress()` on every interaction step and zeroed by `start_engagement()`. Gives the policy a sense of urgency it didn't have before (previously nothing distinguished step 1 of 5 from step 5 of 5). Stale on a host between engagements once it's no longer active — accepted imprecision, not fixed.
+
+`EpisodeState.set()` accepts `bool | float` now (not just `bool`) to support `engagement_progress`'s real-valued range — booleans still coerce via `float(True) == 1.0`, unchanged for every other feature.
+
 ## Config
 
 ```python
@@ -66,19 +75,22 @@ class EnvironmentConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
-    context_window: int = DEFAULT_CONTEXT_WINDOW  # = 3; number of recent step exchanges retained in LLM history
     api_timeout: int = 60     # seconds before an LLM API call is aborted and retried
     reasoning_effort: str | None = None  # DeepInfra reasoning_effort field; set to "none" to disable thinking on Qwen models
 ```
 
 ## LLM Message History
 
-The message history gives the LLM context about recent steps. It is cleared on `reset()`, then immediately used for the scripted initial scan. Each interaction step adds:
+The message history gives the LLM context about the current engagement. It is cleared on `reset()`, then immediately used for the scripted initial scan. Each interaction step adds:
 - one `user` message (the instruction)
 - one `assistant` message (the tool call)
 - one `tool` message (the command output)
 
-A sliding window limits history to the last `context_window` complete exchanges. Older exchanges are dropped after each step. This prevents the LLM from accumulating enough context to start making strategic decisions that belong to the RL policy — the LLM's role is to execute individual instructions, not to plan across many steps. The system prompt and initial task message are always retained as a fixed header. `ABANDON` doesn't touch message history at all, since it never calls the LLM.
+**Scoped to the engagement, not the episode.** `start_engagement()` resets history back to just the system prompt + initial task header, discarding the previous engagement's conversation. Naturally bounded by `max_engagement_steps` — no separate rolling-window pruning needed (the old `context_window`/`_prune_messages` mechanism, which trimmed a rolling window across the *whole episode*, is retired as of the fix below).
+
+This replaces an earlier design where a small rolling window (`context_window`, default 3 exchanges) slid across the entire episode regardless of which host was active. That caused a real bug: a host re-engaged later in the same episode had its already-discovered facts (e.g. an open port) correctly reflected in the RL state tensor, but the LLM's own conversation context had evicted them in favor of whatever host was engaged in between — so it re-verified information it had already found instead of acting on it directly. Resetting per-engagement instead of sliding across engagements fixes this for the *current* engagement; a host's *previous* engagement is still not carried forward on re-engagement (deliberately deferred — see `next_steps.md`).
+
+`ABANDON` doesn't touch message history at all, since it never calls the LLM.
 
 ## Diagnostics
 

@@ -23,7 +23,20 @@ KNOWLEDGE_FEATURES = [
     "creds_found",
     "shell_access",
     "is_root",
+    # 0..1, how far the *active* host's current engagement is through its safety
+    # cap (set by Environment.interact()/start_engagement()) — lets the policy
+    # sense urgency ("almost out of budget on this host") instead of treating
+    # every interaction step as if it had unlimited time. Meaningless (stale)
+    # for non-active hosts between engagements — a known, accepted imprecision.
+    "engagement_progress",
 ]
+
+# Capped try-count per action against a host, not just a tried/not-tried flag —
+# lets the policy distinguish "tried once" from "tried repeatedly, nothing new,"
+# a signal for learning when an action (or the host) is worth abandoning. Read as
+# a plain truthy check (mark_tried.get() > 0) anywhere only "was this tried at
+# all" matters — the count is additional signal, not a replacement contract.
+MAX_TRIED_COUNT = 5
 
 COVERAGE_FEATURES = [
     f"tried_{action.name.lower()}" for action in Action if action not in NO_COVERAGE_ACTIONS
@@ -59,12 +72,13 @@ class EpisodeState:
             self._hosts[ip] = [0.0] * NUM_FEATURES
         return self._hosts[ip]
 
-    def set(self, ip: str, feature: str, value: bool) -> None:
-        """Set a single feature for a host."""
+    def set(self, ip: str, feature: str, value: bool | float) -> None:
+        """Set a single feature for a host. Booleans coerce to 1.0/0.0 (float(True)
+        == 1.0); floats (e.g. engagement_progress) are stored as-is."""
         vec = self._get_or_add(ip)
         if vec is None:
             return
-        vec[FEATURE_INDEX[feature]] = 1.0 if value else 0.0
+        vec[FEATURE_INDEX[feature]] = float(value)
 
     def update(self, ip: str, features: dict[str, bool]) -> None:
         """Set multiple features for a host at once."""
@@ -72,15 +86,23 @@ class EpisodeState:
             self.set(ip, feature, value)
 
     def get(self, ip: str, feature: str) -> bool:
-        """Return the current value of a feature for a host."""
+        """Return the current value of a feature for a host as a truthy check —
+        NOT a faithful round-trip for count/float-valued features (tried_*,
+        engagement_progress): 0.4 or a try-count of 3 both read back as plain
+        True here. Read the tensor (to_tensor()) or _hosts directly for the
+        actual value."""
         vec = self._hosts.get(ip)
         if vec is None:
             return False
         return bool(vec[FEATURE_INDEX[feature]])
 
     def mark_tried(self, ip: str, action: Action) -> None:
-        """Record that an action was attempted against a host."""
-        self.set(ip, f"tried_{action.name.lower()}", True)
+        """Increment the (capped) try-count for an action against a host."""
+        vec = self._get_or_add(ip)
+        if vec is None:
+            return
+        idx = FEATURE_INDEX[f"tried_{action.name.lower()}"]
+        vec[idx] = min(vec[idx] + 1.0, MAX_TRIED_COUNT)
 
     def host_features(self, ip: str) -> dict[str, bool]:
         """Return knowledge features for a host as a dict (for action masking)."""

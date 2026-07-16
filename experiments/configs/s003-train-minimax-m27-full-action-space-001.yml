@@ -1,0 +1,62 @@
+# REINFORCE training run — scenario-003, full_action_space experiment.
+# Tests whether is_valid()'s structural preconditions on exploit-path actions
+# (BRUTE_FORCE_*/CONNECT_*/PROBE_HTTP/PROBE_REDIS/PROBE_MONGO) help or hurt
+# learning, versus removing them and leaving it to the LLM's own judgment (a
+# no-op like `echo ok` when it lacks context, with the -0.1 step cost as the
+# only deterrent). ABANDON's MIN_STEPS_BEFORE_ABANDON gate is unaffected by
+# this flag and still applies. See docs/adr/014-hierarchical-single-host-
+# engagement.md's Phase 1 notes and docs/features/rl-policy.md's "Action
+# Masking" section.
+#
+# User's explicit call, made with awareness it reverses the "equally likely
+# until discovered" masking design used everywhere else this session. If this
+# run disappoints, the plan is to go back to full_action_space: false — that's
+# a one-line revert, not a code change.
+#
+# lr=0.003 / gamma=0.95: the same combination used in the pre-ADR-014 -005
+# conditioned run (not fully apples-to-apples, different architecture, but
+# gives some precedent it doesn't outright destabilize training on this
+# model/scenario). Deliberately not using the originally-proposed lr=0.01 /
+# gamma=0.9 — bundling a 10x lr jump with the masking change would make a
+# disappointing run hard to attribute to one cause or the other.
+# max_engagement_steps=20 (up from the smoke config's 5): more room per
+# engagement now that nothing structurally shortens unproductive exploration.
+#
+# Known, deliberately-unfixed limitation this run will still hit: brute-force
+# has a 0% success rate in every run so far (model guesses a wordlist path
+# that doesn't exist; its one correct self-discovery attempt was blocked by
+# the executor's redirect filter) — full_action_space doesn't touch that, so
+# SSH/FTP/Telnet chains are still expected to stall at the credential step.
+#
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+max_engagement_steps: 20
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+full_action_space: true
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 2
+
+# --- Training ---
+num_episodes: 25
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

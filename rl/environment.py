@@ -53,6 +53,24 @@ _INITIAL_SCAN_FOLLOWUP = (
 # behavior, not a failure, so a single exchange isn't enough to call this done or failed.
 _INITIAL_SCAN_MAX_TRIES = 4
 
+# Actions that can legitimately earn the terminal exploit reward, mapped to the
+# vulnerability each is "for" — used to withhold credit when an exploit fires
+# under a different action than the one that's supposed to cash it in. Found in
+# practice (full_action_space run, 2026-07-16): policy sampled BRUTE_FORCE_SSH,
+# but the LLM already had credentials from an earlier turn and just connected
+# directly — a real ssh_weak_credentials exploit, credited to the wrong action.
+# BRUTE_FORCE_*/SCAN_PORTS/PROBE_PORT/PROBE_HTTP deliberately excluded: hydra
+# alone only sets creds_found (rl/parser.py's _parse_hydra never fires an
+# ExploitEvent), and CONNECT_* is what's supposed to use the credential —
+# crediting BRUTE_FORCE_* directly would blur that intended two-step chain.
+_ACTION_VULNERABILITY: dict[Action, str] = {
+    Action.CONNECT_SSH: "ssh_weak_credentials",
+    Action.CONNECT_FTP: "ftp_anonymous_login",
+    Action.CONNECT_TELNET: "telnet_weak_credentials",
+    Action.PROBE_REDIS: "redis_no_auth",
+    Action.PROBE_MONGO: "mongodb_no_auth",
+}
+
 @dataclass
 class EnvironmentConfig:
     container_name: str
@@ -193,14 +211,18 @@ class Environment:
         self._engagement_step_count += 1
         done = self._step_count >= self.config.max_steps
 
-        exploited = info.get("exploit") is not None
-        if exploited:
+        # Pool removal and engagement-end key off "did the active host genuinely
+        # get compromised" (info["compromised"]), not "did this step earn reward"
+        # (info["exploit"]) — a wrong-action exploit still removes the host and
+        # ends the engagement, it just doesn't pay the sampled action.
+        compromised = info.get("compromised", False)
+        if compromised:
             self._state.remove(ip)  # must come after any state.set() calls on ip — remove() would be undone by re-adding
         else:
             self._update_engagement_progress()
 
         cap_hit = self._engagement_step_count >= self.config.max_engagement_steps
-        engagement_done = exploited or cap_hit
+        engagement_done = compromised or cap_hit
         if engagement_done:
             self._active_host = None
 
@@ -314,7 +336,20 @@ class Environment:
         # reinforce the wrong pair for a result it didn't cause — so an exploit only
         # counts here if it landed on the host this engagement is targeting.
         wrong_host = parsed.exploit is not None and parsed.exploit.host != ip
-        exploit = None if (parsed.exploit is None or already_exploited or wrong_host) else parsed.exploit
+
+        # Did the active host genuinely get compromised this step? Drives pool
+        # removal and engagement-end below, regardless of reward — the world state
+        # is real (shell_access really happened) even when the RL shouldn't get
+        # credit for it (see wrong_action next).
+        compromised = parsed.exploit is not None and not wrong_host and not already_exploited
+
+        # Reward only if the exploit that fired is the one this action is actually
+        # "for" (_ACTION_VULNERABILITY above) — e.g. a real ssh_weak_credentials
+        # exploit under BRUTE_FORCE_SSH still doesn't get credited, since that's
+        # CONNECT_SSH's job. Independent of wrong_host: this only applies once an
+        # exploit has already passed the host check.
+        wrong_action = compromised and _ACTION_VULNERABILITY.get(action) != parsed.exploit.vulnerability
+        exploit = parsed.exploit if compromised and not wrong_action else None
         reward = self._reward_calc.step(exploit)
         self._step_count += 1
 
@@ -325,6 +360,7 @@ class Environment:
             "command": request.command,
             "exit_code": result.exit_code,
             "exploit": exploit,
+            "compromised": compromised,
             "truncated": result.truncated,
         }
         logger.debug("cmd=%r exit=%d truncated=%s", request.command, result.exit_code, result.truncated)
@@ -332,6 +368,11 @@ class Environment:
             logger.info(
                 "  └─ exploit on %s ignored — engagement targeted %s (action=%s)",
                 parsed.exploit.host, ip, action.name,
+            )
+        if wrong_action:
+            logger.info(
+                "  └─ %s exploit ignored for reward — action=%s doesn't earn it (host still compromised)",
+                parsed.exploit.vulnerability, action.name,
             )
         logger.info(
             "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f%s",

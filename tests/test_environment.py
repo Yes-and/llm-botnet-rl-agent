@@ -274,6 +274,31 @@ def test_interact_exploit_on_wrong_host_gives_no_reward_and_engagement_continues
     assert "172.18.0.5" in env._state.known_hosts()
 
 
+def test_interact_exploit_wrong_action_gives_no_reward_but_still_ends_engagement(env_mocks):
+    """Found in a real run (2026-07-16): the policy sampled BRUTE_FORCE_SSH, but the
+    LLM ran a MongoDB connection instead (already knew Mongo was the only open
+    service) and it succeeded. Real exploit, wrong action — no reward credit, but
+    the host genuinely got compromised, so it's still removed and the engagement
+    still ends (state realism is independent of RL credit assignment)."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_27017_open": True})
+    env.start_engagement("172.18.0.5")
+    mock_llm.complete.return_value = _req(
+        "python3 -c \"from pymongo import MongoClient; "
+        "client = MongoClient('mongodb://172.18.0.5:27017/'); print(client.list_database_names())\""
+    )
+    mock_exec.execute.return_value = _res("['admin', 'config', 'local']")
+
+    _, reward, _, info = env.interact(Action.BRUTE_FORCE_SSH)
+
+    assert reward == pytest.approx(-0.1)
+    assert info["exploit"] is None
+    assert info["compromised"] is True
+    assert info["engagement_done"] is True
+    assert "172.18.0.5" not in env._state.known_hosts()
+    assert env.active_host is None
+
+
 def test_start_engagement_on_solved_host_raises(env_mocks):
     """Once a host is removed from the pool, it can't be re-engaged — that IS the
     dedup mechanism now (replaces the old shell_access mask)."""

@@ -88,6 +88,7 @@ env = Environment(env_config)
 policy = Policy(
     hidden_dim=raw.get("hidden_dim", 128),
     num_layers=raw.get("num_layers", 2),
+    full_action_space=raw.get("full_action_space", False),
 )
 
 optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
@@ -189,7 +190,7 @@ print(f"Container:   {env_config.container_name}")
 print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
 print(f"Model:       {env_config.model}")
 print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
-print(f"Engagement:  max_engagement_steps={env_config.max_engagement_steps}")
+print(f"Engagement:  max_engagement_steps={env_config.max_engagement_steps}  full_action_space={policy.full_action_space}")
 print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}  entropy_coeff={entropy_coeff}")
 print(f"Seeds:       python={seed_python}  torch={seed_torch}")
 print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
@@ -232,7 +233,7 @@ for episode in range(resume_episode + 1, resume_episode + num_episodes + 1):
 
         engagement_done = False
         while not engagement_done and not done:
-            action, log_prob, entropy = policy.sample(state, host_idx)
+            action, log_prob, entropy = policy.sample(state, host_idx, env.engagement_step_count)
             state, reward, done, info = env.interact(action)
 
             skip = info.get("skip")

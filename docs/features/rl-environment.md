@@ -48,7 +48,9 @@ Each `interact(action)` call (except `ABANDON`, below) runs:
 
 ## `ABANDON`
 
-`ABANDON` is a learned action, available in every interaction step, that ends the current engagement early. It is **mechanical, not LLM-driven** — no instruction is sent, no command is issued — since it's a control-flow decision about episode structure, not a shell task. It still costs the standard `-0.1` step penalty and consumes one unit of the global step budget.
+`ABANDON` is a learned action that ends the current engagement early. It is **mechanical, not LLM-driven** — no instruction is sent, no command is issued — since it's a control-flow decision about episode structure, not a shell task. It still costs the standard `-0.1` step penalty and consumes one unit of the global step budget.
+
+**Masked out for the first `MIN_STEPS_BEFORE_ABANDON` (3) steps of an engagement** (`rl/actions.py`) — added after a smoke test showed an untrained policy sampling `ABANDON` on ~30% of decisions, simply because it's one of only 3 valid actions at engagement start. Prevents the policy from ever learning a degenerate "give up immediately, every time" optimum before it's tried anything. Gated on `Environment.engagement_step_count`, passed explicitly into `Policy.sample()`/`predict()` rather than stored as a state-tensor feature — it's masking-time context the network doesn't need as an input.
 
 ## Safety Cap
 

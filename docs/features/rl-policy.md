@@ -24,16 +24,20 @@ The action head is conditioned on the active host's feature vector unconditional
 
 ## Action Masking
 
-The mask is a direct reflection of `rl.actions.is_valid()` — no precondition logic is duplicated in `policy.py`. `_build_action_mask(host_row)` builds a `[NUM_ACTIONS]` boolean mask (`True` = invalid) by calling `is_valid()` for every action against the active host's current feature dict, and the resulting logits are soft-masked (pushed to a large negative value, not hard `-inf`) before softmax.
+The mask is a direct reflection of `rl.actions.is_valid()` — no precondition logic is duplicated in `policy.py`. `_build_action_mask(host_row, engagement_step, full_action_space)` builds a `[NUM_ACTIONS]` boolean mask (`True` = invalid) by calling `is_valid()` for every action against the active host's current feature dict, and the resulting logits are soft-masked (pushed to a large negative value, not hard `-inf`) before softmax.
 
-This mask is recomputed from the active host's live features on **every** call, which gives it the "dial-in" property central to Phase 1's design: right after the scripted discovery scan, only `is_alive` is known, so `is_valid()` only passes `SCAN_PORTS`, `PROBE_PORT`, and `ABANDON` — the policy is structurally forced into recon before anything else. As the engagement discovers open ports, services, and credentials, the corresponding brute-force/connect/probe actions unmask themselves; actions whose precondition is no longer relevant (e.g. `BRUTE_FORCE_SSH` once `creds_found` is `True`) mask back out. `ABANDON` is unconditionally valid (`is_valid(Action.ABANDON, ...)` always returns `True`), which also guarantees the mask never fully excludes every action — there's always a valid fallback even with nothing known about a host yet.
+This mask is recomputed from the active host's live features on **every** call, which gives it the "dial-in" property central to Phase 1's design: right after the scripted discovery scan, only `is_alive` is known, so `is_valid()` only passes `SCAN_PORTS` and `PROBE_PORT` — the policy is structurally forced into recon before anything else. As the engagement discovers open ports, services, and credentials, the corresponding brute-force/connect/probe actions unmask themselves; actions whose precondition is no longer relevant (e.g. `BRUTE_FORCE_SSH` once `creds_found` is `True`) mask back out.
+
+**`ABANDON` is gated on `engagement_step` (`rl/actions.py`'s `MIN_STEPS_BEFORE_ABANDON = 3`), not unconditionally valid.** Added 2026-07-16 after a smoke test showed an untrained policy sampling `ABANDON` on ~30% of decisions — expected given it was 1 of only 3 valid actions at engagement start, but the user wanted it structurally impossible for the policy to learn a "give up immediately, every time" optimum regardless. `engagement_step` isn't a state-tensor feature — it's passed explicitly (`Environment.engagement_step_count`, threaded through `Policy.sample()`/`predict()`) since it's masking-time context, not something the network needs as an input. The "always at least one valid action" guarantee this used to provide now comes from `SCAN_PORTS`/`PROBE_PORT` instead (valid the moment `is_alive` is set, which is true for every host in the pool) — not from `ABANDON`.
+
+**`full_action_space` (experimental, 2026-07-16)** — a `Policy` constructor flag (`raw.get("full_action_space", False)` in both training scripts) that short-circuits every precondition above except `ABANDON`'s: with it on, every other action is valid from step one, and it's left to the LLM's own judgment (plus the standard `-0.1` step cost) to recognize when it lacks enough context and no-op instead. Testing whether the structural masking above actually helps learning, or whether it's better to let the policy learn preconditions from reward alone. Every existing precondition is left intact in `is_valid()`'s source — the flag only adds an early return before them — so switching back to structural masking is a one-line config change, not a code change.
 
 Host-level dedup (previously a `shell_access` mask on the host head, ADR 012) is gone from the policy entirely: a solved host is removed from the pool by the environment (`EpisodeState.remove`), so it's structurally impossible for the training loop to hand a compromised host's index to the policy again within the same episode.
 
 ## Sampling
 
 ```python
-dist = Categorical(logits=self._action_logits(state, host_idx))
+dist = Categorical(logits=self._action_logits(state, host_idx, engagement_step))
 action_idx = dist.sample()
 log_prob = dist.log_prob(action_idx)
 entropy = dist.entropy()
@@ -44,13 +48,13 @@ At evaluation time, argmax is used via `policy.predict()`.
 ## Interface
 
 ```python
-policy = Policy(hidden_dim=128, num_layers=2)
+policy = Policy(hidden_dim=128, num_layers=2, full_action_space=False)
 
-action, log_prob, entropy = policy.sample(state_tensor, host_idx)
-action                    = policy.predict(state_tensor, host_idx)
+action, log_prob, entropy = policy.sample(state_tensor, host_idx, engagement_step)
+action                    = policy.predict(state_tensor, host_idx, engagement_step)
 ```
 
-`host_idx` is the row index into the `[MAX_HOSTS, NUM_FEATURES]` state tensor for the host the caller started an engagement on — obtained via `env._state.known_hosts().index(host_ip)` in `scripts/train.py`.
+`host_idx` is the row index into the `[MAX_HOSTS, NUM_FEATURES]` state tensor for the host the caller started an engagement on — obtained via `env._state.known_hosts().index(host_ip)` in `scripts/train.py`. `engagement_step` (default 0) is `env.engagement_step_count` — only consulted by the `ABANDON` mask.
 
 ## Files
 

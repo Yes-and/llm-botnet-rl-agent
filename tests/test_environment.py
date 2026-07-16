@@ -184,6 +184,28 @@ def test_start_engagement_resets_message_history(env_mocks):
     assert len(env._messages) == env._n_header  # prior engagement's exchange is gone
 
 
+def test_engagement_step_count_increments_and_resets(env_mocks):
+    """Policy.sample()'s ABANDON gate reads this property directly (not through
+    the state tensor) — must increment per interact() call and reset on
+    start_engagement(), independent of which host."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True})
+    env._state.update("172.18.0.6", {"is_alive": True})
+
+    env.start_engagement("172.18.0.5")
+    assert env.engagement_step_count == 0
+
+    mock_llm.complete.return_value = _req("nmap -sV -p 22 172.18.0.5 -oG -")
+    mock_exec.execute.return_value = _res("")
+    env.interact(Action.SCAN_PORTS)
+    assert env.engagement_step_count == 1
+    env.interact(Action.SCAN_PORTS)
+    assert env.engagement_step_count == 2
+
+    env.start_engagement("172.18.0.6")
+    assert env.engagement_step_count == 0
+
+
 def test_interact_without_active_engagement_raises(env_mocks):
     env, _, _ = env_mocks
     with pytest.raises(RuntimeError, match="no active engagement"):

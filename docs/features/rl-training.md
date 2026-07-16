@@ -32,7 +32,7 @@ while not episode done:
     host_idx = known_hosts.index(host_ip)
 
     while not engagement done and not episode done:
-        action, log_prob, entropy = policy.sample(state, host_idx)
+        action, log_prob, entropy = policy.sample(state, host_idx, env.engagement_step_count)
         state, reward, done, info = env.interact(action)
         # non-skip steps: append to this engagement's log_probs/rewards
         engagement_done = info["engagement_done"]
@@ -65,6 +65,7 @@ One YAML file per run under `experiments/configs/`. Training-specific fields:
 | `grad_clip` | 1.0 | Max gradient norm (`clip_grad_norm_`). |
 | `entropy_coeff` | 0.0 | Entropy bonus weight; `loss -= entropy_coeff * entropy`. |
 | `max_engagement_steps` | 10 | `EnvironmentConfig` field — safety cap per engagement (ADR 014). |
+| `full_action_space` | false | Experimental (2026-07-16): if true, `Policy` skips every `is_valid()` precondition except `ABANDON`'s — every other action valid from step one, left to the LLM's own judgment plus the `-0.1` step cost. See `docs/features/rl-policy.md`'s "Action Masking" section. |
 
 `conditioned_action_head` and `duration_options` (pre-ADR-014 fields) are no longer read — the policy's action head is unconditionally host-conditioned, and the duration head is retired (single-host persistence subsumes multi-try budgets). Old configs that still set these keys are unaffected; the keys are just ignored.
 

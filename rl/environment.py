@@ -122,6 +122,13 @@ class Environment:
     def active_host(self) -> str | None:
         return self._active_host
 
+    @property
+    def engagement_step_count(self) -> int:
+        """Interaction steps completed so far in the current engagement (0 right
+        after start_engagement()) — the caller passes this into policy.sample()/
+        is_valid() for the ABANDON gate, since it lives outside the state tensor."""
+        return self._engagement_step_count
+
     def start_engagement(self, host_ip: str) -> None:
         """Set the active host for the next sequence of interact() calls.
 

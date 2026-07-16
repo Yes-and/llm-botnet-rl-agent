@@ -54,14 +54,18 @@ print(f"Container: {config.container_name}")
 print(f"Steps:     {config.max_steps}")
 print(f"Model:     {config.model}")
 print(f"Seed:      {seed}")
+print(f"Full space: {raw.get('full_action_space', False)}")
 print(f"Log file:  {args.log_file}")
 print()
 
 
-def _random_action(env: Environment, host_ip: str) -> Action:
+def _random_action(env: Environment, host_ip: str, full_action_space: bool) -> Action:
     """Sample a valid action uniformly at random for the active host."""
     features = env._state.host_features(host_ip)
-    candidates = [a for a in Action if is_valid(a, features)]
+    candidates = [
+        a for a in Action
+        if is_valid(a, features, env.engagement_step_count, full_action_space)
+    ]
     return random.choice(candidates)
 
 
@@ -82,7 +86,7 @@ while not done:
 
     engagement_done = False
     while not engagement_done and not done:
-        action = _random_action(env, host_ip)
+        action = _random_action(env, host_ip, raw.get("full_action_space", False))
         _, reward, done, info = env.interact(action)
         total_reward += reward
         engagement_done = info["engagement_done"]

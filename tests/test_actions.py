@@ -1,9 +1,20 @@
 import pytest
-from rl.actions import Action, is_valid
+from rl.actions import Action, is_valid, MIN_STEPS_BEFORE_ABANDON
 
 
-def test_abandon_always_valid():
-    assert is_valid(Action.ABANDON, {})
+def test_abandon_requires_min_engagement_steps():
+    assert not is_valid(Action.ABANDON, {}, engagement_step=0)
+    assert not is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON - 1)
+    assert is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON)
+
+
+def test_full_action_space_bypasses_preconditions_except_abandon():
+    assert is_valid(Action.BRUTE_FORCE_SSH, {}, full_action_space=True)
+    assert is_valid(Action.CONNECT_SSH, {}, full_action_space=True)
+    assert is_valid(Action.PROBE_MONGO, {}, full_action_space=True)
+    # ABANDON's gate still applies even in full_action_space mode
+    assert not is_valid(Action.ABANDON, {}, engagement_step=0, full_action_space=True)
+    assert is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON, full_action_space=True)
 
 
 def test_scan_ports_requires_alive():
@@ -72,7 +83,7 @@ def test_all_actions_covered():
     for action in Action:
         if action in connect_actions:
             continue
-        assert is_valid(action, host)
+        assert is_valid(action, host, engagement_step=MIN_STEPS_BEFORE_ABANDON)
 
     host_with_creds = {**host, "creds_found": True}
     for action in connect_actions:

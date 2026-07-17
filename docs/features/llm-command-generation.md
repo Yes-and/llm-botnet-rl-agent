@@ -29,6 +29,7 @@ The system prompt instructs the model to:
 - Avoid redirecting output to `/dev/null`
 - Use minimum verbosity (no `-v`/`-vv` on nmap, no `-V` on hydra)
 - Prefer targeted, fast commands — each command has a strict time limit; if a previous attempt timed out, use a more conservative approach
+- The pre-installed brute-force wordlist's path (`/usr/share/wordlists/passwords.txt`) is stated directly, so the model doesn't have to guess a common real-world path (e.g. `rockyou.txt`) or spend steps discovering it (2026-07-17: added after a full_action_space training run showed the model repeatedly guessing wrong paths, and the `2>/dev/null` command-executor block — kept intentionally, see `docs/features/command-executor.md` — costing several steps whenever it tried to self-discover the real one)
 
 ## Verified Results (2026-05-11)
 

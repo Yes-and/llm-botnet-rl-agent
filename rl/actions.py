@@ -68,7 +68,12 @@ def is_valid(
         case Action.CONNECT_SSH:
             return host_features.get("creds_found", False) and host_features.get("service_ssh", False)
         case Action.CONNECT_FTP:
-            return host_features.get("creds_found", False) and host_features.get("service_ftp", False)
+            # Unlike SSH/Telnet, FTP's exploitable path in this scenario is
+            # anonymous login (no credential to discover) — gating on
+            # creds_found made host06 (soft FTP, anonymous:anonymous)
+            # structurally unreachable, since hydra never sets creds_found
+            # for a login that doesn't require one.
+            return host_features.get("service_ftp", False)
         case Action.CONNECT_TELNET:
             return host_features.get("creds_found", False) and host_features.get("service_telnet", False)
         case Action.PROBE_HTTP:

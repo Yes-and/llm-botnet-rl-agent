@@ -18,7 +18,12 @@ _DANGEROUS_PATTERNS = [
     (re.compile(r"\bdd\b"), "raw disk I/O"),
     (re.compile(r"\bmkfs\b"), "formats a filesystem"),
     (re.compile(r":\(\)\s*\{"), "fork bomb"),  # matches :(){ ... } shell function definition
-    (re.compile(r">\s*/dev/"), "redirects output to /dev/ — remove the redirect and retry; output must stay visible"),
+    # (?<!2) exempts `2>/dev/null` (stderr suppression, benign — the model uses this
+    # correctly for its own filesystem self-discovery, e.g. `find ... 2>/dev/null`)
+    # while still blocking `>/dev/null`/`1>/dev/null`/`&>/dev/null` (stdout hiding).
+    # Doesn't handle a stray space between the fd digit and `>` (e.g. `2 > /dev/null`)
+    # — not seen in practice, not worth a variable-width lookbehind for.
+    (re.compile(r"(?<!2)>\s*/dev/"), "redirects stdout to /dev/ — remove the redirect and retry; output must stay visible"),
 ]
 
 

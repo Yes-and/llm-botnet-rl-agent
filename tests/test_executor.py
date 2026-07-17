@@ -108,9 +108,26 @@ def test_dev_write_rejected(command):
 
 def test_dev_write_rejection_message_is_actionable():
     executor = Executor("test-container")
-    result = executor.execute("find /tmp -name '*.txt' 2>/dev/null")
+    result = executor.execute("nmap -oX - target > /dev/sda")
     assert result.exit_code == -1
     assert "remove the redirect" in result.output
+
+
+@pytest.mark.parametrize("command", [
+    "find /usr/share/wordlists -name '*.txt' 2>/dev/null",
+    "ls /usr/share/wordlists/ 2>/dev/null",
+])
+def test_stderr_suppression_to_dev_null_allowed(command):
+    """2>/dev/null is ordinary stderr suppression, not output-hiding — the model
+    uses it correctly for its own filesystem self-discovery (e.g. finding the
+    real wordlist path) and it must not be blocked alongside genuine `>` stdout
+    redirects. Real incident: this exact pattern got rejected in a training run,
+    silently costing the model its own correct self-discovery attempt."""
+    executor = Executor("test-container")
+    with patch("agent.executor.subprocess.run", return_value=make_proc("passwords.txt")):
+        result = executor.execute(command)
+    assert result.exit_code == 0
+    assert "passwords.txt" in result.output
 
 
 # ---------------------------------------------------------------------------

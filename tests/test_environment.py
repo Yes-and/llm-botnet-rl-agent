@@ -134,14 +134,37 @@ def test_reset_raises_when_scan_never_finds_hosts(env_mocks):
         env.reset()
 
 
-def test_reset_raises_on_scan_llm_failure(env_mocks):
+def test_reset_retries_after_transient_scan_llm_failure(env_mocks):
+    """Regression test: a 429/timeout/etc. on the first scan attempt used to crash
+    the whole training run immediately instead of costing a retry, since this path
+    predates _try_once()'s broader exception handling (real incident: a run died at
+    episode 19 on a single rate-limited scripted scan). The retry budget already
+    used for 'found nothing yet' must also absorb outright call failures."""
+    env, mock_llm, mock_exec = env_mocks
+    mock_llm.complete.side_effect = [
+        Exception("429 Too Many Requests"),
+        _req("nmap -sn 172.18.0.0/24 -oG -"),
+    ]
+    # execute() is only reached on the second (successful) attempt — the first
+    # attempt fails inside complete(), before execute() would ever be called.
+    mock_exec.execute.return_value = _res("Host: 172.18.0.60 (target_host)\tStatus: Up\n")
+
+    env.reset()
+
+    assert "172.18.0.60" in env._state.known_hosts()
+    assert mock_llm.complete.call_count == 2
+
+
+def test_reset_raises_after_all_scan_attempts_fail(env_mocks):
     """An empty pool from a swallowed scan failure would silently waste the whole
-    episode — this must be a hard error, not a skip."""
+    episode — once every attempt in the retry budget has failed, that must surface
+    as a hard error, not a skip."""
     env, mock_llm, mock_exec = env_mocks
     mock_llm.complete.side_effect = ValueError("no tool call")
 
-    with pytest.raises(RuntimeError, match="Scripted initial scan failed"):
+    with pytest.raises(RuntimeError, match="found no hosts"):
         env.reset()
+    assert mock_llm.complete.call_count == 4  # _INITIAL_SCAN_MAX_TRIES
 
 
 # ── start_engagement() ─────────────────────────────────────────────────────────

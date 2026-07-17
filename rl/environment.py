@@ -236,18 +236,26 @@ class Environment:
         reasonable agent's first move for "discover the subnet" is often checking
         its own network config before running the actual scan, so one exchange
         frequently finds zero hosts without anything being wrong — nudge with a
-        follow-up and try again. Only raises once every attempt has found nothing;
-        that's a hard error, not a skip, since an empty pool means no engagement is
-        possible for the whole episode and absorbing the failure would silently
-        waste the run.
+        follow-up and try again. The same budget also absorbs transient LLM-call
+        failures (timeouts, rate limits) — a 429 here used to crash the whole
+        training run instead of just costing a retry, since this path predates
+        _try_once()'s broader exception handling. Only raises once every attempt
+        has failed or found nothing; that's a hard error, not a skip, since an
+        empty pool means no engagement is possible for the whole episode and
+        absorbing the failure would silently waste the run.
         """
         instruction = _INITIAL_SCAN_INSTRUCTION
         for attempt in range(1, _INITIAL_SCAN_MAX_TRIES + 1):
             self._messages.append({"role": "user", "content": instruction})
             try:
                 request = self._client.complete(self._messages)
-            except (ValueError, openai.APITimeoutError) as exc:
-                raise RuntimeError(f"Scripted initial scan failed: {exc}") from exc
+            except Exception as exc:
+                self._messages.pop()  # remove the dangling instruction; keeps history well-formed
+                logger.warning(
+                    "Initial scan attempt %d/%d failed, retrying: %s",
+                    attempt, _INITIAL_SCAN_MAX_TRIES, exc,
+                )
+                continue
             self._messages.append(request.assistant_message)
             result = self._executor.execute(request.command)
             self._messages.append({
@@ -268,9 +276,10 @@ class Environment:
             instruction = _INITIAL_SCAN_FOLLOWUP
 
         raise RuntimeError(
-            f"Scripted initial scan found no hosts after {_INITIAL_SCAN_MAX_TRIES} attempts. "
-            "Check train.debug.log for the commands the LLM ran — this usually means a bad "
-            "subnet guess or the sandbox network isn't reachable, not an LLM API failure."
+            f"Scripted initial scan found no hosts after {_INITIAL_SCAN_MAX_TRIES} attempts "
+            "(each attempt may have failed outright or just found nothing — check train.log's "
+            "'Initial scan attempt N/M failed' warnings vs. train.debug.log for the commands "
+            "the LLM ran to tell which)."
         )
 
     def _try_once(self, action: Action, ip: str) -> tuple[float, dict[str, Any]]:

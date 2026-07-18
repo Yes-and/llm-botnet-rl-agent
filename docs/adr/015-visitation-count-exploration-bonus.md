@@ -47,3 +47,15 @@ Implementation shape:
 - New file `tests/test_train.py` — covers `_visitation_bonus` and, retroactively, `_compute_returns` (previously untested).
 - `docs/features/rl-training.md` updated: Algorithm section (bonus description + updated loss formula), Config table (`visitation_bonus_coeff` row), Structured Output section (new `rewards.csv`/`steps.csv` columns).
 - No run has yet been launched with `visitation_bonus_coeff > 0` — this ADR covers the mechanism, not a result. Intended pairing: a future unmasked (`full_action_space: true`) re-run, to test whether the bonus prevents the entropy collapse the original `full_action_space-001` run showed.
+
+## Run results: visitation-bonus-001 (2026-07-18)
+
+`experiments/configs/s003-train-minimax-m27-visitation-bonus-001.yml` — `visitation_bonus_coeff: 0.05`, `full_action_space: true`, 25 episodes. Compared against `full_action_space-001` episodes 26-50 (the clean comparison window identified during preflight; see that config's header comment).
+
+**Bonus achieved its goal: entropy collapse prevented.** Baseline (ep26-50): entropy 1.9566 → 0.2143 (~89% drop), action space collapses to `PROBE_REDIS`/`PROBE_MONGO`/`ABANDON` only by ~ep38. This run (ep1-25): entropy 2.4575 → 2.2402 (~9% drop), every action still nonzero at ep25. Comparison isn't a perfectly controlled A/B (baseline's ep26 already starts partway collapsed from its own ep1-25; this run starts fresh at ep1), but the direction is unambiguous.
+
+**Tradeoff: fewer exploits.** 28 over 25 episodes (~1.12/ep) vs. baseline's 50 in the same 25-ep window (~2.0/ep) — expected cost of diverting gradient toward under-tried, mostly-unproductive actions instead of hammering the two known-soft services.
+
+**Only `redis_no_auth`/`mongodb_no_auth` fired**, predicted in the config's own preflight comment: brute-force's ~0% success rate (wordlist hallucination, see `docs/features/llm-command-generation.md`) stalls SSH/FTP/Telnet chains regardless of exploration pressure — unrelated to the bonus mechanism.
+
+**Checked the flagged dominance risk** (config comment: "if the bonus is visibly dominating... drop by an order of magnitude") — not observed. Loss term is `visitation_bonus_coeff * intrinsic_returns` (0.05×); per-step, a first-time action's bonus is ~0.05 (about half the -0.1 real step cost), decaying as `1/sqrt(count)`. Enough to keep rare actions alive without swamping real exploit signal. No coefficient change indicated by this run.

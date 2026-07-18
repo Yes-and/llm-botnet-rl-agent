@@ -1,0 +1,69 @@
+# REINFORCE training run — scenario-003, visitation-count exploration bonus
+# experiment, paired with full_action_space: true.
+#
+# Tests whether a count-based exploration bonus (1/sqrt(count) per action,
+# whole-run persistent, see docs/adr/015-visitation-count-exploration-bonus.md)
+# prevents the entropy collapse full_action_space-001 showed under vanilla
+# REINFORCE — that run collapsed onto PROBE_REDIS/PROBE_MONGO/ABANDON only by
+# ~ep38 (entropy 2.4572 -> 0.2143 over 50 episodes). Structural masking alone
+# (masked-baseline-002) already showed it prevents *total* starvation; this
+# run tests whether the bonus does the same job without masking's structural
+# constraints, i.e. whether "equally likely until discovered, bonus-nudged
+# toward the untried" beats "equally likely until discovered, structurally
+# gated" for keeping the full action space alive.
+#
+# Every hyperparameter below is copied verbatim from
+# s003-train-minimax-m27-full-action-space-001.yml, deliberately unchanged,
+# so any difference in outcome is attributable to visitation_bonus_coeff and
+# nothing else. If this run disappoints, visitation_bonus_coeff: 0.0 is a
+# one-line revert back to that exact baseline.
+#
+# visitation_bonus_coeff=0.05: starting point, same order of magnitude as
+# entropy_coeff (0.01) since both are additive loss terms competing with the
+# same -0.1/+9.9 real reward scale. Not yet empirically tuned on this model/
+# scenario — watch rewards.csv's visitation_bonus_sum column relative to
+# total_reward on the first few episodes; if the bonus is visibly dominating
+# (policy chasing obviously-hopeless actions at the cost of exploit_count),
+# drop this by roughly an order of magnitude on the next attempt rather than
+# tweaking mid-run.
+#
+# Known, deliberately-unfixed limitation this run will still hit (unrelated
+# to the bonus): brute-force has a 0% success rate in every run so far (model
+# guesses a wordlist path that doesn't exist) — SSH/FTP/Telnet chains are
+# still expected to stall at the credential step regardless of exploration
+# pressure, since the bonus affects which actions get *tried*, not whether a
+# tried action's own command is correct.
+#
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+max_engagement_steps: 20
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+full_action_space: true
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 2
+
+# --- Training ---
+num_episodes: 25
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+visitation_bonus_coeff: 0.05
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

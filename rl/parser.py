@@ -79,6 +79,15 @@ _MONGO_DATA_CALL = re.compile(r"list_database_names|list_collection_names|\.find
 # FTP('<ip>', ...) — python3 ftplib
 _FTP_PYLIB_HOST = re.compile(r"FTP\(['\"]?([\d.]+)")
 
+# An actual login attempt — either an explicit .login(...) call, or the auto-login
+# constructor form FTP(host, user, passwd). Deliberately NOT just "any comma inside
+# FTP(...)" — FTP('<ip>', timeout=5) has a comma too, from a harmless kwarg, with no
+# login attempted at all. Requires a second *string literal* (the user) right after
+# the host, or an explicit user= keyword. FTP('<ip>') alone only opens a control
+# connection — vsftpd accepts that regardless of anonymous_enable, so a bare
+# connect-and-disconnect would otherwise "succeed" against the hardened host too.
+_FTP_LOGIN_CALL = re.compile(r"\.login\(|FTP\(\s*['\"][^'\"]*['\"]\s*,\s*['\"]|FTP\([^)]*\buser\s*=")
+
 # ftp binary: "ftp [flags] <ip>" — match IP on first line of command
 _FTP_BIN_HOST = re.compile(r"^\s*ftp\b[^\n]*?([\d]+\.[\d]+\.[\d]+\.[\d]+)")
 
@@ -211,9 +220,12 @@ def _parse_ftp_pylib(command: str, output: str, exit_code: int) -> ParseResult:
     ip = m.group(1)
     if "Traceback" in output:
         return ParseResult()
+    if not _FTP_LOGIN_CALL.search(command):
+        return ParseResult()
     # Note: ftplib does not print the 230 response to stdout, so we cannot check for it.
-    # Connection failures raise exceptions (ConnectionRefusedError, error_perm) which
-    # produce a Traceback — that check above covers the common failure modes.
+    # Login failures raise ftplib.error_perm (unhandled -> Traceback, caught above);
+    # the _FTP_LOGIN_CALL check above rules out a bare connect-only command that never
+    # attempted authentication at all, which would otherwise "succeed" trivially.
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],
         exploit=ExploitEvent(host=ip, vulnerability="ftp_anonymous_login"),

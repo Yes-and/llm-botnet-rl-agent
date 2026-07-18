@@ -350,6 +350,26 @@ FTP_PYLIB_CASES = [
         "172.18.0.4", True, "ftp_anonymous_login",
         id="ftp-pylib-pwd-success",
     ),
+    pytest.param(
+        # connect-only, no login ever attempted — vsftpd accepts the TCP/control
+        # connection regardless of anonymous_enable, so this "succeeds" against the
+        # hardened host too if not caught. Found 2026-07-19 while auditing all
+        # sub-parsers for the same false-positive-credit pattern as the Mongo bug.
+        "python3 -c \"\nfrom ftplib import FTP\nftp = FTP('172.18.0.4', timeout=5)\nprint(ftp.getwelcome())\n\"",
+        0,
+        "220 (vsFTPd 3.0.5)\n",
+        "172.18.0.4", False, None,
+        id="ftp-pylib-connect-only-no-login-not-a-breach",
+    ),
+    pytest.param(
+        # auto-login constructor form FTP(host, user, passwd) — no explicit .login(
+        # call, but authentication still happened via the constructor.
+        "python3 -c \"\nfrom ftplib import FTP\nftp = FTP('172.18.0.4', 'anonymous', 'anonymous', timeout=5)\nprint(ftp.pwd())\n\"",
+        0,
+        "/\n",
+        "172.18.0.4", True, "ftp_anonymous_login",
+        id="ftp-pylib-constructor-auto-login-success",
+    ),
 ]
 
 

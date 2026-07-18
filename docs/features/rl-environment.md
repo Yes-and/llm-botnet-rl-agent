@@ -36,7 +36,7 @@ Failure is a hard `RuntimeError`, not a skip, but only once every attempt has co
 
 Each `interact(action)` call (except `ABANDON`, below) runs:
 
-1. **Translate** — `_action_to_instruction(action, ip)` produces a one-sentence natural-language task for the LLM, `ip` being the active host.
+1. **Translate** — `_action_to_instruction(action, ip)` produces a one-sentence natural-language task for the LLM, `ip` being the active host. Instructions are deliberately protocol-scoped, not "use any credentials you have" — `CONNECT_SSH` used to say exactly that (fixed 2026-07-19, see [[project_visitation_count_exploration_bonus]] memory), which measurably steered the LLM into reusing FTP-cracked credentials over SSH on a host with no SSH service, wasting a real crack. This is distinct from the standing decision not to hint at the wordlist path (ADR/`llm-command-generation.md`) — that would add information the LLM doesn't have; this only removed wording that actively contradicted state the environment already tracks (`service_ssh`/`service_ftp`/`service_telnet`).
 2. **LLM call** — append the instruction as a user message; call `LLMClient.complete()` to get a shell command (and, if the model emits one, its reasoning trace).
 3. **Execute** — run the command via `Executor` inside the attacker container.
 4. **Parse** — `parse_step(command, output, exit_code)` returns state feature updates and an optional `ExploitEvent`.

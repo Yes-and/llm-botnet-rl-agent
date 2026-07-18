@@ -439,10 +439,7 @@ def _action_to_instruction(action: Action, ip: str) -> str:
         case Action.BRUTE_FORCE_TELNET:
             return f"Attempt to brute-force Telnet credentials on {ip}."
         case Action.CONNECT_SSH:
-            return (
-                f"Attempt to log in via SSH to {ip} using any credentials you have "
-                "discovered. Run 'id' to confirm shell access."
-            )
+            return f"Attempt to log in via SSH to {ip}. Run 'id' to confirm shell access."
         case Action.CONNECT_FTP:
             return f"Connect to the FTP service on {ip} and list directory contents."
         case Action.CONNECT_TELNET:

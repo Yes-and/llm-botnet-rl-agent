@@ -20,6 +20,14 @@ loss = -Σ_t  G_t · log π(a_t | s_t, host_t)
 
 **Baseline:** if `use_baseline: true`, the mean return across the *whole episode's* concatenated returns is subtracted before the update — unchanged from before ADR 014.
 
+**Visitation-count exploration bonus (optional, `visitation_bonus_coeff`, default `0.0` — off):** an intrinsic per-step reward `1/sqrt(count)`, where `count` is a persistent, whole-run (never per-episode) count of how many times the policy has selected that action, including the current occurrence. Motivated by the `full_action_space` run's entropy collapse onto 3 of 12 actions — vanilla REINFORCE with no baseline reinforces whatever earns positive return early, and the flat `entropy_coeff` bonus (uniform pressure on the whole distribution) didn't stop it; a count-based bonus targets specifically under-tried actions instead. Computed as a second, parallel reward stream (`intrinsic_rewards`, same per-engagement structure as `engagement_rewards`) run through the same `_compute_returns(gamma)`, then folded into the loss with its own coefficient — deliberately kept separate from the real `reward` fed into `rewards.csv`'s `total_reward`, so that column keeps meaning "real reward only":
+
+```
+loss = -Σ_t (G_t + visitation_bonus_coeff · G_t^intrinsic) · log π(a_t | s_t, host_t)  −  entropy_coeff · entropy_bonus
+```
+
+`use_baseline` mean-centering is applied only to the real returns, not the intrinsic stream. The visitation counter is process-lifetime only — not saved into or restored from checkpoints, so a `--resume`'d run restarts it from zero (same category of known gap as the `learning_rate` resume issue below).
+
 ## Episode Loop
 
 ```
@@ -66,6 +74,7 @@ One YAML file per run under `experiments/configs/`. Training-specific fields:
 | `entropy_coeff` | 0.0 | Entropy bonus weight; `loss -= entropy_coeff * entropy`. |
 | `max_engagement_steps` | 10 | `EnvironmentConfig` field — safety cap per engagement (ADR 014). |
 | `full_action_space` | false | Experimental (2026-07-16): if true, `Policy` skips every `is_valid()` precondition except `ABANDON`'s — every other action valid from step one, left to the LLM's own judgment plus the `-0.1` step cost. See `docs/features/rl-policy.md`'s "Action Masking" section. |
+| `visitation_bonus_coeff` | 0.0 | Experimental (2026-07-18): weight on the count-based exploration bonus described above. `0.0` (default) is a full no-op — no behavior change, no extra computation cost beyond bookkeeping. |
 
 `conditioned_action_head` and `duration_options` (pre-ADR-014 fields) are no longer read — the policy's action head is unconditionally host-conditioned, and the duration head is retired (single-host persistence subsumes multi-try budgets). Old configs that still set these keys are unaffected; the keys are just ignored.
 
@@ -83,8 +92,8 @@ Saved to `experiments/results/<config-stem>/checkpoint_ep<N>.pt`. Each checkpoin
 
 ## Structured Output
 
-- `rewards.csv` — one row per episode: `total_reward`, `loss`, `exploit_count`, `engagements` (count of engagements this episode), `entropy`, plus `act_<action>` counts. No more `tries_<action>` columns — every interaction step is exactly one primitive command now, so there's nothing to aggregate.
-- `steps.csv` — one row per interaction step: `episode`, `step`, `host`, `action`, `reward`, `engagement_done`. One row = one primitive command, always (no more multi-try blocks to backfill across).
+- `rewards.csv` — one row per episode: `total_reward`, `loss`, `exploit_count`, `engagements` (count of engagements this episode), `entropy`, `visitation_bonus_sum` (raw, undiscounted per-episode sum of the exploration bonus — populated regardless of whether `visitation_bonus_coeff` is on, so it can be inspected without having enabled it), plus `act_<action>` counts. No more `tries_<action>` columns — every interaction step is exactly one primitive command now, so there's nothing to aggregate.
+- `steps.csv` — one row per interaction step: `episode`, `step`, `host`, `action`, `reward`, `engagement_done`, `visitation_count` (running whole-run count for that action, post-increment), `visitation_bonus` (`1/sqrt(visitation_count)` for that step). One row = one primitive command, always (no more multi-try blocks to backfill across).
 - `train.transcript.log` — one human-readable block per interaction step (thinking, command, output) — see `docs/features/logging.md`.
 
 ## Analysis Tooling

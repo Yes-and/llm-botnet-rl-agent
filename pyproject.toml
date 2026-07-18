@@ -31,7 +31,7 @@ analysis = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "rl*"]
+include = ["agent*", "rl*", "scripts*"]
 
 [tool.ruff]
 target-version = "py311"

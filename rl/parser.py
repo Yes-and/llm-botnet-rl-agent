@@ -69,6 +69,13 @@ _REDIS_HOST = re.compile(r"redis-cli\s+.*?-h\s+([\d.]+)")
 # MongoClient('<ip>', ...) or MongoClient('mongodb://<ip>:port/')
 _MONGO_HOST = re.compile(r"MongoClient\(['\"]?(?:mongodb://)?([\d.]+)")
 
+# Calls that actually enumerate data (require auth on a hardened deployment).
+# server_info()/command('buildInfo')/hello succeed pre-auth on virtually any MongoDB
+# deployment (needed for the driver handshake), so a bare successful MongoClient(...)
+# call proves connectivity, not an auth bypass — same distinction PING vs. INFO makes
+# for redis-cli below.
+_MONGO_DATA_CALL = re.compile(r"list_database_names|list_collection_names|\.find\(|listDatabases")
+
 # FTP('<ip>', ...) — python3 ftplib
 _FTP_PYLIB_HOST = re.compile(r"FTP\(['\"]?([\d.]+)")
 
@@ -186,6 +193,8 @@ def _parse_mongo(command: str, output: str, exit_code: int) -> ParseResult:
         return ParseResult()
     ip = m.group(1)
     if "Traceback" in output or "ServerSelectionTimeoutError" in output:
+        return ParseResult()
+    if not _MONGO_DATA_CALL.search(command):
         return ParseResult()
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],

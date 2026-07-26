@@ -1,0 +1,34 @@
+name: scenario-004
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s004_attacker
+    networks:
+      - s004_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears hydra restore files and any other working directory state between runs
+    stdin_open: true
+    tty: true
+
+  target:
+    build: ../images/telnet-target-mirai
+    container_name: s004_target
+    hostname: target
+    networks:
+      - s004_net
+
+networks:
+  s004_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24

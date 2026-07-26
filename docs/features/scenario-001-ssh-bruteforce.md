@@ -82,4 +82,4 @@ Assessment: win condition met at step 8. Steps 9–10 confirm the loop has no ea
 
 - `sandbox/compose/scenario-001.yml`
 - `sandbox/images/attacker/Dockerfile`
-- `sandbox/images/attacker/passwords.txt`
+- `sandbox/images/attacker/credentials.txt`

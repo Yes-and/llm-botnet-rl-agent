@@ -13,9 +13,7 @@ venv/
 # Experiment results
 experiments/results/*
 !experiments/results/.gitkeep
-run.log
-run.debug.log
-run.transcript.log
+*.log
 
 # Jupyter
 .ipynb_checkpoints/

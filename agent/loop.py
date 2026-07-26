@@ -14,6 +14,8 @@ class EpisodeConfig:
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
+    base_url: str = "https://api.deepinfra.com/v1/openai"
+    api_key_env: str = "DEEPINFRA_API_KEY"
 
 
 @dataclass
@@ -34,7 +36,7 @@ def run_episode(
     config: EpisodeConfig,
     on_step: Callable[[StepRecord], bool | None] | None = None,
 ) -> EpisodeResult:
-    client = LLMClient(model=config.model)
+    client = LLMClient(model=config.model, base_url=config.base_url, api_key_env=config.api_key_env)
     executor = Executor(
         config.container_name,
         dry_run=config.dry_run,

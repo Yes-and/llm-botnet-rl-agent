@@ -239,7 +239,23 @@ def test_llm_client_receives_model_from_config():
         MockClient.return_value.complete.return_value = make_request(0)
         MockExecutor.return_value.execute.return_value = make_result(0)
         run_episode(config)
-    MockClient.assert_called_once_with(model="some-model")
+    _, kwargs = MockClient.call_args
+    assert kwargs["model"] == "some-model"
+
+
+def test_llm_client_receives_base_url_and_api_key_env_from_config():
+    config = EpisodeConfig(
+        task="t", container_name="c", max_steps=1,
+        base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY",
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.return_value = make_request(0)
+        MockExecutor.return_value.execute.return_value = make_result(0)
+        run_episode(config)
+    _, kwargs = MockClient.call_args
+    assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
+    assert kwargs["api_key_env"] == "OPENROUTER_API_KEY"
 
 
 def test_executor_receives_container_and_dry_run_from_config():

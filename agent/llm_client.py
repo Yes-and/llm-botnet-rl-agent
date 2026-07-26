@@ -25,13 +25,20 @@ def build_initial_messages(task: str) -> list[dict]:
 
 
 class LLMClient:
-    def __init__(self, model: str = "moonshotai/Kimi-K2.6", api_timeout: int = 60, reasoning_effort: str | None = None):
+    def __init__(
+        self,
+        model: str = "moonshotai/Kimi-K2.6",
+        api_timeout: int = 60,
+        reasoning_effort: str | None = None,
+        base_url: str = "https://api.deepinfra.com/v1/openai",
+        api_key_env: str = "DEEPINFRA_API_KEY",
+    ):
         self.model = model
         self._api_timeout = api_timeout
         self._reasoning_effort = reasoning_effort
         self._client = openai.OpenAI(
-            api_key=os.environ["DEEPINFRA_API_KEY"],
-            base_url="https://api.deepinfra.com/v1/openai",
+            api_key=os.environ[api_key_env],
+            base_url=base_url,
         )
 
     def complete(self, messages: list[dict]) -> CommandRequest:

@@ -31,7 +31,7 @@ llm-botnet-rl-agent/
 | Layer | Choice | Notes |
 |---|---|---|
 | Python | 3.11 (via pyenv) | |
-| LLM API | DeepInfra (OpenAI-compatible) | Use the `openai` SDK with a custom `base_url` |
+| LLM API | DeepInfra by default; other OpenAI-compatible providers (e.g. OpenRouter) per-config | Use the `openai` SDK; `base_url`/`api_key_env` are config fields, not hardcoded |
 | RL | Custom (PyTorch) | |
 | Sandbox environment | Docker + Docker Compose | |
 | Experiment config | YAML | |

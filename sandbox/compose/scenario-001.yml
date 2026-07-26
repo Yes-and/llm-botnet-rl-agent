@@ -29,3 +29,6 @@ networks:
   s001_net:
     driver: bridge
     internal: true
+    ipam:
+      config:
+        - subnet: 172.19.0.0/24

@@ -24,7 +24,7 @@ attacker  ←→  host01  (SSH)
 | Node | Base image | Exposed service | Vulnerability |
 |---|---|---|---|
 | `attacker` | Custom Debian | — | — |
-| `host01` | `ubuntu:22.04` | SSH (22) | Weak credentials (`admin:admin123`) |
+| `host01` | `ubuntu:22.04` | SSH (22) | Weak credentials (`admin:admin1234`) |
 | `host02` | `ubuntu:22.04` | Telnet (23) | Weak credentials (`admin:admin123`) |
 | `host03` | `ubuntu:22.04` | FTP (21) | Anonymous login enabled + weak credentials |
 | `host04` | `redis:latest` | Redis (6379) | No authentication required |
@@ -34,13 +34,15 @@ attacker  ←→  host01  (SSH)
 
 `ping`, `ip`, `nmap`, `hydra`, `netcat-openbsd`, `curl`, `openssh-client`, `sshpass`, `python3`, `python3-pymongo`, `ls`, `cat`, `find`, `grep`, `echo`, `which`, `telnet`, `ftp`, `redis-cli`
 
-A wordlist of common IoT default credentials is pre-installed at `/usr/share/wordlists/passwords.txt`.
+A credential combo file (`user:pass` pairs, for use with hydra's `-C` flag) is pre-installed at `/usr/share/wordlists/credentials.txt` — Mirai's real default-credential list, see [ADR 016](../adr/016-mirai-credential-list.md).
+
+**2026-07-26:** host01's real credential changed from `admin:admin123` to `admin:admin1234` (a genuine Mirai pair). Historical run tables below predate this change and quote `admin123` accurately for the runs they describe.
 
 ## Target Configuration
 
 ### SSH target (host01)
 - OpenSSH server on port 22
-- Credentials: `admin:admin123`
+- Credentials: `admin:admin1234`
 
 ### Telnet target (host02)
 - `openbsd-inetd` + `telnetd` on port 23

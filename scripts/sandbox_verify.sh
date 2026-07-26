@@ -37,9 +37,9 @@ done
 echo
 echo "== Exploit checks =="
 
-docker exec "$C" sshpass -p admin123 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin@host01 true \
+docker exec "$C" sshpass -p admin1234 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin@host01 true \
     >/tmp/sv_out 2>&1
-report $? "host01 SSH weak creds (admin:admin123)"
+report $? "host01 SSH weak creds (admin:admin1234)"
 
 docker exec "$C" sshpass -p Xk9mP2vL8nQ5rT ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin@host07 true \
     >/tmp/sv_out 2>&1

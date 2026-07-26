@@ -150,7 +150,7 @@ first_success_step: int | None = None
 log_f = open(log_path, "w")
 
 
-def on_step(record: StepRecord) -> None:
+def on_step(record: StepRecord) -> bool:
     global first_success_step
     cmd = record.request.command
     out = record.result.output
@@ -160,11 +160,17 @@ def on_step(record: StepRecord) -> None:
         first_success_step = record.step + 1
     flag = "  <-- SUCCESS" if success else ""
     print(f"[{record.step + 1}/{config.max_steps}] exit={code} {cmd}{flag}")
+    reasoning = record.request.reasoning
     log_f.write(
         f"=== Step {record.step + 1}/{config.max_steps} ===\n"
+        f"reasoning: {reasoning or '(none)'}\n"
         f"command: {cmd}\nexit_code: {code}\nsuccess: {success}\n--- output ---\n{out}\n\n"
     )
+    if record.request.error:
+        # Full raw detail for our own debugging only — never sent to the model, see agent/loop.py.
+        log_f.write(f"--- malformed tool call, raw detail (not shown to model) ---\n{record.request.error}\n\n")
     log_f.flush()
+    return success
 
 
 start = time.time()
@@ -174,6 +180,8 @@ log_f.close()
 
 print()
 print(f"Episode complete — {len(episode.steps)} steps in {elapsed:.1f}s")
+if episode.stop_reason is not None:
+    print(f"Ended early: {episode.stop_reason}")
 if first_success_step is not None:
     print(f"Result: SUCCESS on step {first_success_step}/{config.max_steps}")
 else:

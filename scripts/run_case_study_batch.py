@@ -49,6 +49,9 @@ with open(summary_path, "a", newline="") as summary_f:
         run_dir.mkdir(exist_ok=True)
         for i in range(1, args.repeats + 1):
             print(f"=== {config_path.stem} ({episode_config.model}) run {i}/{args.repeats} ===")
+            # run_case_study() never raises — a mid-episode crash (rate limit, overload,
+            # connection drop) is caught internally and reported with accurate partial
+            # progress, so one bad run can't take down the rest of the batch.
             result = run_case_study(episode_config, exploit_type, run_dir / f"run{i}.log")
             row = {"config": config_path.stem, "model": episode_config.model, "run": i, **result}
             # fails fast on key drift between run_case_study()'s return dict and _FIELDNAMES

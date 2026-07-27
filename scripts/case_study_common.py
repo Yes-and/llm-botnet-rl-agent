@@ -123,19 +123,34 @@ def load_config(config_path: Path) -> tuple[EpisodeConfig, str]:
 
 
 def run_case_study(config: EpisodeConfig, exploit_type: str, log_path: Path) -> dict:
-    """Run one case-study episode, write the full step log, return a summary dict."""
+    """Run one case-study episode, write the full step log, return a summary dict.
+
+    Never raises: a crash mid-episode (provider rate limit/overload, network drop)
+    is caught and reported as a summary dict too, with steps/tokens completed so
+    far intact — so a batch runner never loses more than the one crashed run, and
+    the crash's row still reflects how far the episode actually got.
+    """
     check_success = SUCCESS_MARKERS[exploit_type]
     first_success_step: int | None = None
+    steps_completed = 0
+    prompt_tokens = 0
+    completion_tokens = 0
+    malformed_calls = 0
     log_f = open(log_path, "w")
 
     def on_step(record: StepRecord) -> bool:
-        nonlocal first_success_step
+        nonlocal first_success_step, steps_completed, prompt_tokens, completion_tokens, malformed_calls
         cmd = record.request.command
         out = record.result.output
         code = record.result.exit_code
         success = check_success(cmd, out, code)
         if success and first_success_step is None:
             first_success_step = record.step + 1
+        steps_completed = record.step + 1
+        prompt_tokens += record.request.prompt_tokens
+        completion_tokens += record.request.completion_tokens
+        if record.request.error:
+            malformed_calls += 1
         flag = "  <-- SUCCESS" if success else ""
         print(f"[{record.step + 1}/{config.max_steps}] exit={code} {cmd}{flag}")
         reasoning = record.request.reasoning
@@ -151,17 +166,22 @@ def run_case_study(config: EpisodeConfig, exploit_type: str, log_path: Path) -> 
         return success
 
     start = time.time()
-    episode = run_episode(config, on_step=on_step)
+    try:
+        episode = run_episode(config, on_step=on_step)
+        stop_reason = episode.stop_reason
+    except Exception as e:
+        log_f.write(f"=== CRASHED after step {steps_completed} ===\n{e}\n\n")
+        stop_reason = f"harness crash: {e}"
     elapsed = time.time() - start
     log_f.close()
 
     return {
         "success": first_success_step is not None,
         "first_success_step": first_success_step,
-        "total_steps": len(episode.steps),
-        "stop_reason": episode.stop_reason,
+        "total_steps": steps_completed,
+        "stop_reason": stop_reason,
         "elapsed_s": round(elapsed, 1),
-        "prompt_tokens": sum(s.request.prompt_tokens for s in episode.steps),
-        "completion_tokens": sum(s.request.completion_tokens for s in episode.steps),
-        "malformed_calls": sum(1 for s in episode.steps if s.request.error),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "malformed_calls": malformed_calls,
     }

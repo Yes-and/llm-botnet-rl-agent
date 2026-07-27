@@ -15,6 +15,8 @@ class CommandRequest:
     assistant_message: dict[str, Any]
     reasoning: str = ""  # model's thinking trace, if the model emits one (empty otherwise)
     error: str | None = None  # set when the tool call itself was malformed; command is not executable
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 def build_initial_messages(task: str) -> list[dict]:
@@ -51,6 +53,11 @@ class LLMClient:
             timeout=self._api_timeout,
             extra_body=extra,
         )
+        # Some OpenAI-compatible providers omit `usage` on certain responses; default to 0
+        # rather than raising, since token counts are informational (cost tracking), not
+        # required for the episode to proceed.
+        prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
         message = response.choices[0].message
         if not message.tool_calls:
             raise ValueError(
@@ -90,6 +97,8 @@ class LLMClient:
                 reasoning=reasoning,
                 assistant_message=assistant_message,
                 error=f"Malformed tool call: {e}",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
             )
 
         return CommandRequest(
@@ -97,4 +106,6 @@ class LLMClient:
             tool_call_id=tool_call.id,
             reasoning=reasoning,
             assistant_message=assistant_message,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )

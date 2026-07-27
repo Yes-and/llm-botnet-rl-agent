@@ -50,6 +50,11 @@ class LLMClient:
             messages=messages,
             tools=TOOLS,
             tool_choice="required",  # always force a tool call; never allow a plain-text response
+            # Executor/loop only ever execute and answer tool_calls[0] — a model that emits more
+            # than one tool call in a turn leaves the rest unanswered in history, which the next
+            # request's provider-side validation then rejects outright (seen as a 400 from
+            # Moonshot AI via OpenRouter: "tool_call_ids did not have response messages").
+            parallel_tool_calls=False,
             timeout=self._api_timeout,
             extra_body=extra,
         )

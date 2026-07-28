@@ -22,6 +22,7 @@ services:
     build: ../images/telnet-target-mirai
     container_name: s004_target
     hostname: target
+    restart: unless-stopped  # telnetd was unresponsive (port 23 closed all episode) for a full batch run — same class of under-load fragility as scenario-003's FTP host06/host12, self-heal instead of silently staying down
     networks:
       - s004_net
 

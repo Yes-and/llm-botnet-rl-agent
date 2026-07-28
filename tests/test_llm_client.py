@@ -68,3 +68,12 @@ def test_no_tool_call_at_all_still_raises():
     client._client.chat.completions.create.return_value = make_response([], content="here is my plan")
     with pytest.raises(ValueError):
         client.complete([])
+
+
+def test_empty_choices_raises_instead_of_crashing():
+    # real case: a provider returned `choices: null`, which used to blow up as an
+    # unhandled TypeError ('NoneType' object is not subscriptable) instead of a clean error
+    client = make_client()
+    client._client.chat.completions.create.return_value = SimpleNamespace(choices=None)
+    with pytest.raises(ValueError):
+        client.complete([])

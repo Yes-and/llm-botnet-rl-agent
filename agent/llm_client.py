@@ -61,8 +61,11 @@ class LLMClient:
         # Some OpenAI-compatible providers omit `usage` on certain responses; default to 0
         # rather than raising, since token counts are informational (cost tracking), not
         # required for the episode to proceed.
-        prompt_tokens = getattr(response.usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(response.usage, "completion_tokens", 0) or 0
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+        if not response.choices:
+            raise ValueError(f"Provider returned no choices: {response!r}")
         message = response.choices[0].message
         if not message.tool_calls:
             raise ValueError(

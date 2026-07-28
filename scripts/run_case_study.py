@@ -29,7 +29,7 @@ parser.add_argument("--log-file", type=Path, default=None,
 args = parser.parse_args()
 log_path = args.log_file or Path(f"{args.config.stem}.log")
 
-config, exploit_type = load_config(args.config)
+config, exploit_type, _target_container = load_config(args.config)
 
 print(f"Config:       {args.config}")
 print(f"Task:         {config.task.strip()}")

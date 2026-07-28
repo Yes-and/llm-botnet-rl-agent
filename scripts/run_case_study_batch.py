@@ -14,6 +14,8 @@ Usage:
 
 import argparse
 import csv
+import subprocess
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -44,10 +46,20 @@ with open(summary_path, "a", newline="") as summary_f:
         writer.writeheader()
 
     for config_path in args.configs:
-        episode_config, exploit_type = load_config(config_path)
+        episode_config, exploit_type, target_container = load_config(config_path)
         run_dir = args.out_dir / config_path.stem
         run_dir.mkdir(exist_ok=True)
         for i in range(1, args.repeats + 1):
+            if target_container:
+                # Repeated brute-force load against the same long-lived target
+                # container degrades it over a batch (confirmed 2026-07-28: telnetd
+                # stops accepting new connections after enough cumulative load,
+                # without the container process ever exiting — restart: policies
+                # never catch this). Recreate it fresh before every single repeat
+                # rather than relying on the container to survive N runs unattended.
+                print(f"Restarting {target_container}...")
+                subprocess.run(["docker", "restart", target_container], check=True)
+                time.sleep(3)  # let the target's services finish coming back up
             print(f"=== {config_path.stem} ({episode_config.model}) run {i}/{args.repeats} ===")
             # run_case_study() never raises — a mid-episode crash (rate limit, overload,
             # connection drop) is caught internally and reported with accurate partial

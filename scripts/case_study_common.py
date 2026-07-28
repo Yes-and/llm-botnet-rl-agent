@@ -105,8 +105,14 @@ assert not SUCCESS_MARKERS["telnet"](
 )
 
 
-def load_config(config_path: Path) -> tuple[EpisodeConfig, str]:
-    """Load a case-study YAML config into an EpisodeConfig + its exploit_type."""
+def load_config(config_path: Path) -> tuple[EpisodeConfig, str, str | None]:
+    """Load a case-study YAML config into an EpisodeConfig + its exploit_type.
+
+    Also returns the optional `target_container` field (the *target*'s container
+    name, not the attacker's) — unset for scenarios that haven't needed it, opt-in
+    for the batch runner to restart it between repeats. See its use in
+    scripts/run_case_study_batch.py.
+    """
     raw = yaml.safe_load(config_path.read_text())
     config = EpisodeConfig(
         task=raw["task"],
@@ -119,7 +125,7 @@ def load_config(config_path: Path) -> tuple[EpisodeConfig, str]:
         base_url=raw.get("base_url", "https://api.deepinfra.com/v1/openai"),
         api_key_env=raw.get("api_key_env", "DEEPINFRA_API_KEY"),
     )
-    return config, raw["exploit_type"]
+    return config, raw["exploit_type"], raw.get("target_container")
 
 
 def run_case_study(config: EpisodeConfig, exploit_type: str, log_path: Path) -> dict:

@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,30 +35,48 @@ class LLMClient:
         reasoning_effort: str | None = None,
         base_url: str = "https://api.deepinfra.com/v1/openai",
         api_key_env: str = "DEEPINFRA_API_KEY",
+        max_retries: int = 5,
+        no_choices_retries: int = 2,
     ):
         self.model = model
         self._api_timeout = api_timeout
         self._reasoning_effort = reasoning_effort
+        self._no_choices_retries = no_choices_retries
+        # SDK default (2) isn't enough to ride out a real rate-limit/overload burst
+        # (seen from both DeepInfra "engine_overloaded" and OpenRouter provider 429s);
+        # only retries retryable statuses (429/408/409/5xx + connection errors) with
+        # its own backoff — a genuine 400 (malformed request) is never retried.
         self._client = openai.OpenAI(
             api_key=os.environ[api_key_env],
             base_url=base_url,
+            max_retries=max_retries,
         )
 
     def complete(self, messages: list[dict]) -> CommandRequest:
         extra = {"reasoning_effort": self._reasoning_effort} if self._reasoning_effort is not None else {}
-        response = self._client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="required",  # always force a tool call; never allow a plain-text response
-            # Executor/loop only ever execute and answer tool_calls[0] — a model that emits more
-            # than one tool call in a turn leaves the rest unanswered in history, which the next
-            # request's provider-side validation then rejects outright (seen as a 400 from
-            # Moonshot AI via OpenRouter: "tool_call_ids did not have response messages").
-            parallel_tool_calls=False,
-            timeout=self._api_timeout,
-            extra_body=extra,
-        )
+        response = None
+        for attempt in range(self._no_choices_retries + 1):
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="required",  # always force a tool call; never allow a plain-text response
+                # Executor/loop only ever execute and answer tool_calls[0] — a model that emits more
+                # than one tool call in a turn leaves the rest unanswered in history, which the next
+                # request's provider-side validation then rejects outright (seen as a 400 from
+                # Moonshot AI via OpenRouter: "tool_call_ids did not have response messages").
+                parallel_tool_calls=False,
+                timeout=self._api_timeout,
+                extra_body=extra,
+            )
+            if response.choices:
+                break
+            # Confirmed via raw response inspection (2026-07-28): OpenRouter's provider-fallback
+            # routing sometimes returns this exact validation error as an HTTP-200-shaped response
+            # (choices=None + an embedded error field) instead of raising, so the SDK's own
+            # max_retries never sees it as retryable. Retry the whole request ourselves.
+            if attempt < self._no_choices_retries:
+                time.sleep(2)
         # Some OpenAI-compatible providers omit `usage` on certain responses; default to 0
         # rather than raising, since token counts are informational (cost tracking), not
         # required for the episode to proceed.
@@ -65,7 +84,7 @@ class LLMClient:
         prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
         completion_tokens = getattr(usage, "completion_tokens", 0) or 0
         if not response.choices:
-            raise ValueError(f"Provider returned no choices: {response!r}")
+            raise ValueError(f"Provider returned no choices after {self._no_choices_retries + 1} attempts: {response!r}")
         message = response.choices[0].message
         if not message.tool_calls:
             raise ValueError(

@@ -70,10 +70,28 @@ def test_no_tool_call_at_all_still_raises():
         client.complete([])
 
 
-def test_empty_choices_raises_instead_of_crashing():
-    # real case: a provider returned `choices: null`, which used to blow up as an
-    # unhandled TypeError ('NoneType' object is not subscriptable) instead of a clean error
+def test_empty_choices_raises_after_exhausting_retries():
+    # real case: OpenRouter provider-fallback routing returned `choices: null` on every
+    # attempt (the underlying "tool_call_ids did not have response messages" 400, disguised
+    # as a 200-shaped response so the SDK's own retry logic never sees it as retryable)
     client = make_client()
     client._client.chat.completions.create.return_value = SimpleNamespace(choices=None)
-    with pytest.raises(ValueError):
-        client.complete([])
+    with patch("agent.llm_client.time.sleep") as mock_sleep:
+        with pytest.raises(ValueError):
+            client.complete([])
+    assert client._client.chat.completions.create.call_count == client._no_choices_retries + 1
+    assert mock_sleep.call_count == client._no_choices_retries
+
+
+def test_empty_choices_recovers_on_retry():
+    # the same failure mode as above, but resolves on a later attempt — confirms the
+    # manual retry loop actually retries the whole request, not just re-reads a cached one
+    client = make_client()
+    client._client.chat.completions.create.side_effect = [
+        SimpleNamespace(choices=None),
+        make_response(['{"command": "ls"}']),
+    ]
+    with patch("agent.llm_client.time.sleep"):
+        request = client.complete([])
+    assert request.command == "ls"
+    assert client._client.chat.completions.create.call_count == 2

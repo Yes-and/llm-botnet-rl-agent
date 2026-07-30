@@ -18,16 +18,23 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from scripts.case_study_common import load_config, run_case_study
+from scripts.case_study_common import _next_free, load_config, run_case_study, split_config_stem
 
 load_dotenv()
 
 parser = argparse.ArgumentParser(description="Run a single-target LLM capability case study.")
 parser.add_argument("config", type=Path, help="Path to YAML task config")
 parser.add_argument("--log-file", type=Path, default=None,
-                     help="Full step output log (default: <config-name>.log)")
+                     help="Full step output log (default: experiments/results/<scenario-slug>/<model>.log, "
+                          "auto-numbered on collision — see CLAUDE.md's Experiment Conventions)")
 args = parser.parse_args()
-log_path = args.log_file or Path(f"{args.config.stem}.log")
+if args.log_file is not None:
+    log_path = args.log_file
+else:
+    scenario_slug, model_slug = split_config_stem(args.config.stem)
+    out_dir = Path("experiments/results") / scenario_slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_path = _next_free(out_dir / f"{model_slug}.log")
 
 config, exploit_type, _target_container = load_config(args.config)
 

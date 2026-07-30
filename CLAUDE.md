@@ -62,6 +62,7 @@ When adding a new binary to the attacker container, update all five of these:
 
 - Every run must be fully reproducible: commit the config before running, set all seeds in the config (not in code), and record the model ID and environment state.
 - Results are gitignored; configs are not. If a run isn't configured, it didn't happen.
+- Case-study results (`experiments/results/`) are nested per scenario: `<scenario>-<exploit>/` (e.g. `s004-telnet/`), holding `<model>[-N].log` for single runs and `<date>-<purpose>/` for batch-runner output — tag the citable one `-final`. `scripts/run_case_study.py`/`scripts/run_case_study_batch.py` derive the scenario folder automatically from the config filename (`s00X-case-<exploit>-<model>.yml`) and auto-number on collision instead of overwriting; only pass `--log-file`/`--out-dir` to add a purpose label (`-confirm-glm52`, `-rerun3-final`).
 
 ## Key Design Decisions
 

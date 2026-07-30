@@ -16,11 +16,12 @@ import argparse
 import csv
 import subprocess
 import time
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from scripts.case_study_common import load_config, run_case_study
+from scripts.case_study_common import _next_free, load_config, run_case_study, split_config_stem
 
 load_dotenv()
 
@@ -32,9 +33,19 @@ _FIELDNAMES = [
 parser = argparse.ArgumentParser(description="Run repeated case-study episodes and summarize results.")
 parser.add_argument("configs", type=Path, nargs="+", help="One or more YAML task configs")
 parser.add_argument("--repeats", type=int, default=10, help="Runs per config (default: 10)")
-parser.add_argument("--out-dir", type=Path, default=Path("experiments/results/batch"),
-                     help="Where to write per-run logs and summary.csv (default: experiments/results/batch)")
+parser.add_argument("--out-dir", type=Path, default=None,
+                     help="Where to write per-run logs and summary.csv "
+                          "(default: experiments/results/<scenario-slug>/<date>-batch, "
+                          "auto-numbered on collision — see CLAUDE.md's Experiment Conventions; "
+                          "pass this explicitly to label the batch's purpose, e.g. ...-confirm-glm52)")
 args = parser.parse_args()
+
+if args.out_dir is not None:
+    out_dir = args.out_dir
+else:
+    scenario_slug, _ = split_config_stem(args.configs[0].stem)
+    out_dir = _next_free(Path("experiments/results") / scenario_slug / f"{date.today().isoformat()}-batch")
+args.out_dir = out_dir
 
 args.out_dir.mkdir(parents=True, exist_ok=True)
 summary_path = args.out_dir / "summary.csv"

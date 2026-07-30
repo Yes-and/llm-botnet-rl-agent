@@ -1,0 +1,34 @@
+name: scenario-005
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s005_attacker
+    networks:
+      - s005_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears working directory state between runs
+    stdin_open: true
+    tty: true
+
+  target:
+    image: mongo:4.4         # stock image, no MONGO_INITDB_ROOT_* set = no auth, matches scenario-003's host08
+    container_name: s005_target
+    hostname: target
+    networks:
+      - s005_net
+
+networks:
+  s005_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.23.0.0/24

@@ -114,6 +114,23 @@ def test_dev_write_rejection_message_is_actionable():
 
 
 @pytest.mark.parametrize("command", [
+    "python3 -c \"import os; os.system('ssh-keygen -t rsa -f /tmp/k -N \\\"\\\"')\"",
+    "python3 -c \"import subprocess; subprocess.run(['ssh-keygen', '-t', 'rsa'])\"",
+    "python3 -c \"import os; os.popen('echo hi').read()\"",
+])
+def test_python_shell_out_rejected_even_for_an_otherwise_harmless_command(command):
+    """os.system/subprocess/os.popen reach any binary in the container regardless of
+    ALLOWED_BINARIES, defeating the curated tool list — real incident 2026-07-31:
+    os.system('ssh-keygen ...') worked despite ssh-keygen not being allowlisted yet.
+    Must be rejected even when the wrapped command itself is harmless (no rm/dd here) —
+    that's the whole point, this isn't the destructive-pattern blocklist."""
+    executor = Executor("test-container")
+    result = executor.execute(command)
+    assert result.exit_code == -1
+    assert "[REJECTED]" in result.output
+
+
+@pytest.mark.parametrize("command", [
     "find /usr/share/wordlists -name '*.txt' 2>/dev/null",
     "ls /usr/share/wordlists/ 2>/dev/null",
 ])

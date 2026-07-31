@@ -6,12 +6,12 @@ import pytest
 from agent.llm_client import LLMClient
 
 
-def make_response(tool_call_args, content=""):
+def make_response(tool_call_args, content="", refusal=None):
     tool_calls = [
         SimpleNamespace(id=f"call_{i}", function=SimpleNamespace(name="execute_command", arguments=args))
         for i, args in enumerate(tool_call_args)
     ]
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
+    message = SimpleNamespace(content=content, tool_calls=tool_calls, refusal=refusal)
     return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
@@ -68,6 +68,27 @@ def test_no_tool_call_at_all_still_raises():
     client._client.chat.completions.create.return_value = make_response([], content="here is my plan")
     with pytest.raises(ValueError):
         client.complete([])
+
+
+def test_no_tool_call_surfaces_refusal_when_present():
+    # real case (Opus 5, 2026-07-28): content=None gave zero signal about why — the
+    # actual reason was only visible in .refusal, which the old error never read.
+    client = make_client()
+    client._client.chat.completions.create.return_value = make_response(
+        [], content=None, refusal="This request triggered restrictions on violative cyber content."
+    )
+    with pytest.raises(ValueError, match="violative cyber content"):
+        client.complete([])
+
+
+def test_no_tool_call_without_refusal_omits_it_from_message():
+    # the common case (no refusal field at all, or None) — error should stay clean,
+    # not print "Refusal: None" noise.
+    client = make_client()
+    client._client.chat.completions.create.return_value = make_response([], content=None)
+    with pytest.raises(ValueError) as exc_info:
+        client.complete([])
+    assert "Refusal" not in str(exc_info.value)
 
 
 def test_empty_choices_raises_after_exhausting_retries():

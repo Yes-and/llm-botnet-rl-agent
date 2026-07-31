@@ -87,8 +87,14 @@ class LLMClient:
             raise ValueError(f"Provider returned no choices after {self._no_choices_retries + 1} attempts: {response!r}")
         message = response.choices[0].message
         if not message.tool_calls:
+            # `.refusal` is a separate field from `.content` on a real content-policy
+            # refusal (confirmed via a raw-response diagnostic on Opus 5, 2026-07-28) —
+            # without it, this error is indistinguishable from any other no-tool-call
+            # case (content=None gives zero signal either way). Surface it when present.
+            refusal = getattr(message, "refusal", None)
+            detail = f" Refusal: {refusal!r}" if refusal else ""
             raise ValueError(
-                f"Model returned no tool call. Text response: {message.content!r}"
+                f"Model returned no tool call. Text response: {message.content!r}{detail}"
             )
         tool_call = message.tool_calls[0]
         # Reasoning models surface the thinking trace in a separate field, not in

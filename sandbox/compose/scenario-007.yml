@@ -1,0 +1,42 @@
+name: scenario-007
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s007_attacker
+    networks:
+      - s007_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears working directory state between runs
+    stdin_open: true
+    tty: true
+
+  target:
+    image: docker:dind       # nested Docker daemon — its own isolated storage/containers,
+                              # NEVER the host's real docker.sock (see docs/adr/017)
+    privileged: true          # required for dind's own nested namespaces/cgroups; scoped
+                              # to this container only, does not expose the host daemon
+    container_name: s007_target
+    hostname: target
+    environment:
+      DOCKER_TLS_CERTDIR: ""  # disables TLS entirely -> daemon listens in plaintext,
+                               # matching the real "exposed unauthenticated Docker API"
+                               # misconfiguration TeamTNT/Graboid scanned for
+    command: ["--host=tcp://0.0.0.0:2375", "--host=unix:///var/run/docker.sock"]
+    networks:
+      - s007_net
+
+networks:
+  s007_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.26.0.0/24

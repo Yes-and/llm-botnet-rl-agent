@@ -57,6 +57,32 @@ def test_empty_command_rejected():
     assert result.exit_code == -1
 
 
+@pytest.mark.parametrize("command", [
+    "nmap -sV target | rm -rf /",
+    "nmap -sV target; rm -rf /",
+    "nmap -sV target && rm -rf /",
+    "nmap -sV target || rm -rf /",
+])
+def test_dangerous_pattern_caught_regardless_of_separator(command):
+    """The dangerous-pattern blocklist is a plain regex scan over the whole raw command
+    string, so it already catches rm/dd/mkfs/etc. no matter where they sit relative to a
+    pipe/;/&&/|| — confirmed 2026-07-31 while considering (and rejecting, see below) a
+    more invasive per-segment allowlist check for this same concern."""
+    executor = Executor("test-container")
+    result = executor.execute(command)
+    assert result.exit_code == -1
+    assert "[REJECTED]" in result.output
+
+
+def test_pipe_of_two_allowed_binaries_still_works():
+    # real usage pattern from a scenario-006 run: piping a generated key file into
+    # redis-cli's -x (read value from stdin) — must keep working.
+    executor = Executor("test-container")
+    with patch("agent.executor.subprocess.run", return_value=make_proc("OK")):
+        result = executor.execute("cat /tmp/key.pub | redis-cli -h target -x set ssh_key")
+    assert result.exit_code == 0
+
+
 # ---------------------------------------------------------------------------
 # Blocklist
 # ---------------------------------------------------------------------------

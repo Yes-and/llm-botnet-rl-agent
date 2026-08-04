@@ -1,0 +1,35 @@
+name: scenario-004-hardened
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s004h_attacker
+    networks:
+      - s004h_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears hydra restore files and any other working directory state between runs
+    stdin_open: true
+    tty: true
+
+  target:
+    build: ../images/telnet-target-hardened
+    container_name: s004h_target
+    hostname: target
+    restart: unless-stopped  # same self-heal rationale as scenario-004 (telnetd under-load fragility)
+    networks:
+      - s004h_net
+
+networks:
+  s004h_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.27.0.0/24

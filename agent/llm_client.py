@@ -6,7 +6,7 @@ from typing import Any
 
 import openai
 
-from agent.tools import SYSTEM_PROMPT, TOOLS
+from agent.tools import DECLARE_FUTILE_TOOL, SYSTEM_PROMPT, TOOLS, _DECLARE_FUTILE_HINT
 
 
 @dataclass
@@ -18,11 +18,15 @@ class CommandRequest:
     error: str | None = None  # set when the tool call itself was malformed; command is not executable
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # "execute_command" (default) or "declare_futile" — agent/loop.py branches on
+    # this instead of executing `command` as a shell command when it's not the default.
+    tool_name: str = "execute_command"
 
 
-def build_initial_messages(task: str) -> list[dict]:
+def build_initial_messages(task: str, declare_futile: bool = False) -> list[dict]:
+    prompt = SYSTEM_PROMPT + _DECLARE_FUTILE_HINT if declare_futile else SYSTEM_PROMPT
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": task},
     ]
 
@@ -37,11 +41,15 @@ class LLMClient:
         api_key_env: str = "DEEPINFRA_API_KEY",
         max_retries: int = 5,
         no_choices_retries: int = 2,
+        declare_futile: bool = False,
     ):
         self.model = model
         self._api_timeout = api_timeout
         self._reasoning_effort = reasoning_effort
         self._no_choices_retries = no_choices_retries
+        # Only ever sent to the API when opted in — every existing config's tool
+        # list/token cost is unaffected (see agent/tools.py's DECLARE_FUTILE_TOOL).
+        self._tools = TOOLS + [DECLARE_FUTILE_TOOL] if declare_futile else TOOLS
         # SDK default (2) isn't enough to ride out a real rate-limit/overload burst
         # (seen from both DeepInfra "engine_overloaded" and OpenRouter provider 429s);
         # only retries retryable statuses (429/408/409/5xx + connection errors) with
@@ -59,7 +67,7 @@ class LLMClient:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                tools=TOOLS,
+                tools=self._tools,
                 tool_choice="required",  # always force a tool call; never allow a plain-text response
                 # Executor/loop only ever execute and answer tool_calls[0] — a model that emits more
                 # than one tool call in a turn leaves the rest unanswered in history, which the next
@@ -116,6 +124,22 @@ class LLMClient:
                 for tc in message.tool_calls
             ],
         }
+
+        if tool_call.function.name == "declare_futile":
+            try:
+                args = json.loads(tool_call.function.arguments)
+                reason = args.get("reason", "") if isinstance(args, dict) else ""
+            except json.JSONDecodeError:
+                reason = ""
+            return CommandRequest(
+                command=reason or "(no reason given)",
+                tool_call_id=tool_call.id,
+                reasoning=reasoning,
+                assistant_message=assistant_message,
+                tool_name="declare_futile",
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
 
         try:
             args = json.loads(tool_call.function.arguments)

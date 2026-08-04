@@ -99,6 +99,23 @@ def test_value_error_sets_stop_reason_and_ends_episode():
     assert result.stop_reason == "Model returned no tool call. Text response: 'here is my plan'"
 
 
+def test_declare_futile_ends_episode_without_executing():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=5, declare_futile=True)
+    futile_request = CommandRequest(
+        command="credentials exhausted", tool_call_id="call_0",
+        assistant_message={"role": "assistant", "tool_calls": [{"id": "call_0"}]},
+        tool_name="declare_futile",
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [make_request(0), futile_request]
+        MockExecutor.return_value.execute.side_effect = [make_result(0)]
+        result = run_episode(config)
+    assert len(result.steps) == 2
+    assert result.stop_reason == "declared futile: credentials exhausted"
+    MockExecutor.return_value.execute.assert_called_once()  # never called for the declare_futile step
+
+
 def test_stop_reason_is_none_on_normal_completion():
     config = EpisodeConfig(task="test task", container_name="c", max_steps=2)
     with patch("agent.loop.LLMClient") as MockClient, \

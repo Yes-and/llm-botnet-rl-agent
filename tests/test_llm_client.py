@@ -6,18 +6,18 @@ import pytest
 from agent.llm_client import LLMClient
 
 
-def make_response(tool_call_args, content="", refusal=None):
+def make_response(tool_call_args, content="", refusal=None, tool_name="execute_command"):
     tool_calls = [
-        SimpleNamespace(id=f"call_{i}", function=SimpleNamespace(name="execute_command", arguments=args))
+        SimpleNamespace(id=f"call_{i}", function=SimpleNamespace(name=tool_name, arguments=args))
         for i, args in enumerate(tool_call_args)
     ]
     message = SimpleNamespace(content=content, tool_calls=tool_calls, refusal=refusal)
     return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def make_client():
+def make_client(declare_futile=False):
     with patch("agent.llm_client.openai.OpenAI"), patch.dict("os.environ", {"DEEPINFRA_API_KEY": "test"}):
-        client = LLMClient()
+        client = LLMClient(declare_futile=declare_futile)
     client._client.chat.completions.create = MagicMock()
     return client
 
@@ -102,6 +102,39 @@ def test_empty_choices_raises_after_exhausting_retries():
             client.complete([])
     assert client._client.chat.completions.create.call_count == client._no_choices_retries + 1
     assert mock_sleep.call_count == client._no_choices_retries
+
+
+def test_declare_futile_disabled_by_default_not_sent_to_api():
+    # Reproducibility guarantee: every existing config's tool list/token cost must
+    # stay byte-for-byte identical unless it opts in.
+    client = make_client()
+    assert [t["function"]["name"] for t in client._tools] == ["execute_command"]
+
+
+def test_declare_futile_tool_added_when_enabled():
+    client = make_client(declare_futile=True)
+    assert "declare_futile" in [t["function"]["name"] for t in client._tools]
+
+
+def test_declare_futile_call_parsed_with_reason():
+    client = make_client(declare_futile=True)
+    client._client.chat.completions.create.return_value = make_response(
+        ['{"reason": "credentials exhausted"}'], tool_name="declare_futile",
+    )
+    request = client.complete([])
+    assert request.tool_name == "declare_futile"
+    assert request.command == "credentials exhausted"
+    assert request.error is None
+
+
+def test_declare_futile_call_missing_reason_is_recoverable():
+    client = make_client(declare_futile=True)
+    client._client.chat.completions.create.return_value = make_response(
+        ["{}"], tool_name="declare_futile",
+    )
+    request = client.complete([])
+    assert request.tool_name == "declare_futile"
+    assert request.command == "(no reason given)"
 
 
 def test_empty_choices_recovers_on_retry():

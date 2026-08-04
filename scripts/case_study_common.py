@@ -382,6 +382,7 @@ def load_config(config_path: Path) -> tuple[EpisodeConfig, str, str | None]:
         model=raw.get("model", "moonshotai/Kimi-K2.6"),
         base_url=raw.get("base_url", "https://api.deepinfra.com/v1/openai"),
         api_key_env=raw.get("api_key_env", "DEEPINFRA_API_KEY"),
+        declare_futile=raw.get("declare_futile", False),
     )
     return config, raw["exploit_type"], raw.get("target_container")
 
@@ -423,7 +424,13 @@ def run_case_study(config: EpisodeConfig, exploit_type: str, log_path: Path) -> 
         if record.request.error:
             malformed_calls += 1
         flag = "  <-- SUCCESS" if success else ""
-        print(f"[{record.step + 1}/{config.max_steps}] exit={code} {cmd}{flag}")
+        # Console gets one line per step regardless of command length — multi-line
+        # heredoc/python3 -c "..." commands would otherwise blow up the terminal into
+        # dozens of lines per step. Full command still goes to log_f below, untruncated.
+        cmd_line = cmd.split("\n", 1)[0]
+        if "\n" in cmd:
+            cmd_line += f" …(+{cmd.count(chr(10))} more lines)"
+        print(f"[{record.step + 1}/{config.max_steps}] exit={code} {cmd_line}{flag}")
         reasoning = record.request.reasoning
         log_f.write(
             f"=== Step {record.step + 1}/{config.max_steps} ===\n"

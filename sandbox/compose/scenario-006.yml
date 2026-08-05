@@ -24,6 +24,7 @@ services:
                               # sshd — see that Dockerfile's comment for why both were needed
     container_name: s006_target
     hostname: target
+    restart: unless-stopped
     networks:
       - s006_net
 

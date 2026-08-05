@@ -22,6 +22,7 @@ services:
     image: mongo:4.4         # stock image, no MONGO_INITDB_ROOT_* set = no auth, matches scenario-003's host08
     container_name: s005_target
     hostname: target
+    restart: unless-stopped
     networks:
       - s005_net
 

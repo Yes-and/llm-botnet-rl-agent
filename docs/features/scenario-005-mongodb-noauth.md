@@ -64,6 +64,10 @@ Ran both as 10-repeat batches (`experiments/results/s005-mongo/2026-07-30-batch/
 
 Confirms the realistic-prompt variance-collapse effect generalizes: no model in this batch showed scenario-004-Telnet-style step-count spread, consistent with Mongo no-auth having no discovery/brute-force phase regardless of model.
 
+## Qwen3-Coder-30B rerun (2026-08-06/07) — likely OpenRouter backend-routing variance, not model sampling variance
+
+Reran the same config, 10 repeats: **10/10, zero failures** (up from 6/10) — but every single run is byte-for-byte identical (`nmap -p 27017 target` → the same `pymongo` one-liner, always exactly 2 steps), a complete reversal from the original batch's always-1-step blind guess with no `nmap` at all. Two batches of the same model/config/task, each internally perfectly consistent but pointing in opposite directions — not normal sampling variance. Most likely explanation: OpenRouter routed this model through two different backends/versions across the two batches. **Implication: a single 10-run batch for this model via OpenRouter may not be a stable/citable number** — report both batches side by side rather than treating the rerun as superseding the original if this model is compared again.
+
 ## Open questions
 
 - `restart: unless-stopped` added to `target` 2026-08-06 (scenario-004 precedent) ahead of the 4-model batch — still no fragility actually observed across three 10-repeat batches so far (single connect + enumerate, not repeated load); added proactively, not reactively.
@@ -77,4 +81,4 @@ Confirms the realistic-prompt variance-collapse effect generalizes: no model in 
 - `experiments/configs/s005-case-mongo-{kimi-k3-openrouter,qwen3-coder-480b,qwen3-coder-30b,minimax-m27}.yml`
 - `scripts/case_study_common.py` (added `mongo` to `SUCCESS_MARKERS`)
 - `scripts/run_s005_batch_nohup.sh`
-- `experiments/results/s005-mongo/` (single run, `2026-07-30-batch/`, `2026-07-30-batch-2/`, `2026-08-05-4model/`)
+- `experiments/results/s005-mongo/` (single run, `2026-07-30-batch/`, `2026-07-30-batch-2/`, `2026-08-05-4model/`, `2026-08-07-qwen30b-rerun/`)

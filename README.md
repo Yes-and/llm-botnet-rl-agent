@@ -1,4 +1,4 @@
-# llm-botnet-rl-agent
+# Agentic Botnet Management With Reinforcement Learning
 
 Master's thesis project. Uses reinforcement learning to drive LLM-based agents that develop and adapt offensive code — including botnet infrastructure, exploitation tools, and general pentesting capabilities — in a controlled simulation environment. Goals: benchmark LLM coding capability in adversarial contexts, probe LLM safeguard limits, and formalize a suitable RL approach for this problem class.
 

@@ -33,22 +33,18 @@ from matplotlib.colors import BoundaryNorm, ListedColormap, TwoSlopeNorm
 
 # ── Action → category ─────────────────────────────────────────────────────────
 
-CATEGORIES = ["nothing", "scan", "probe", "brute", "exploit", "abandon"]
-COLORS     = ["#aaaaaa", "#4e9af1", "#f5a623", "#e74c3c", "#2ecc71", "#8e44ad"]
+CATEGORIES = ["nothing", "scan", "probe", "brute", "exploit"]
+COLORS     = ["#aaaaaa", "#4e9af1", "#f5a623", "#e74c3c", "#2ecc71"]
 
 _ACTION_TO_CAT = {
-    # Pre-ADR-014 actions — kept so old run data (before the single-host-engagement
-    # refactor) still plots correctly. Neither is emitted by the current action space.
     "DO_NOTHING":        "nothing",
-    "SCAN_NETWORK":      "scan",
-    "SCAN_PORTS":        "scan",
+    "SCAN_NETWORK":      "scan",   "SCAN_PORTS":        "scan",
     "PROBE_PORT":        "probe",  "PROBE_HTTP":        "probe",
     "PROBE_REDIS":       "probe",  "PROBE_MONGO":       "probe",
     "BRUTE_FORCE_SSH":   "brute",  "BRUTE_FORCE_FTP":   "brute",
     "BRUTE_FORCE_TELNET":"brute",
     "CONNECT_SSH":       "exploit","CONNECT_FTP":        "exploit",
     "CONNECT_TELNET":    "exploit",
-    "ABANDON":           "abandon",
     # Skipped steps logged by train.py — rendered as nothing
     "API_TIMEOUT":       "nothing", "NO_TOOL_CALL":      "nothing",
     "INVALID_HOST_IDX":  "nothing", "UNEXPECTED_ERROR":  "nothing",
@@ -64,7 +60,6 @@ _COL_TO_CAT = {
     "act_brute_force_telnet":"brute",
     "act_connect_ssh":       "exploit","act_connect_ftp":        "exploit",
     "act_connect_telnet":    "exploit",
-    "act_abandon":           "abandon",
 }
 
 def _cat_idx(cat: str) -> int:

@@ -1,11 +1,9 @@
 """
-RL environment: Gym-like reset()/interact() wrapper for ADR 014 Phase 1
-(single-host engagement, worker only — host selection is not learned yet).
+RL environment: Gym-like reset()/step() wrapper.
 
-The RL policy picks an Action against the currently active host; the environment
-translates that into a natural-language instruction, calls the LLM to get a shell
-command, executes it, parses the output, updates episode state, and returns
-(obs, reward, done, info).
+The RL policy picks (Action, host_idx); the environment translates that into a
+natural-language instruction, calls the LLM to get a shell command, executes it,
+parses the output, updates episode state, and returns (obs, reward, done, info).
 
 agent/ and rl/ are intentionally decoupled — this module imports from agent/,
 but nothing in agent/ imports from rl/.
@@ -22,7 +20,7 @@ import torch
 
 from agent.executor import Executor, format_tool_result
 from agent.llm_client import LLMClient, build_initial_messages
-from rl.actions import Action
+from rl.actions import Action, BROADCAST_ACTIONS
 from rl.parser import parse_step
 from rl.reward import RewardCalculator
 from rl.state import EpisodeState
@@ -38,31 +36,28 @@ _INITIAL_TASK = (
     "You will be given one specific task per step — focus only on that task."
 )
 
-# Auto-run once at reset() to populate the host pool — not a learned action (ADR 014:
-# recon-of-the-subnet is not the capability under test). Still LLM-driven rather than
-# a hardcoded nmap invocation: the environment has no notion of the sandbox's subnet
-# CIDR, and the LLM already knows how to discover its own network. What's scripted is
-# *that* it runs, unconditionally, before any policy decision — not *how* it runs.
-_INITIAL_SCAN_INSTRUCTION = "Discover all live hosts on the local subnet."
-_INITIAL_SCAN_FOLLOWUP = (
-    "That did not discover any live hosts yet. Run the actual network scan "
-    "(e.g. nmap) against your subnet now to find them."
-)
-# A reasonable agent's first move for "discover the subnet" is often checking its own
-# network config (e.g. `ip addr`) before running the actual scan — that's expected
-# behavior, not a failure, so a single exchange isn't enough to call this done or failed.
-_INITIAL_SCAN_MAX_TRIES = 4
+# Per-action state feature that marks "this action's goal has been reached", for actions
+# that don't emit an ExploitEvent themselves. BRUTE_FORCE_* actions only find credentials
+# (rl/parser.py's _parse_hydra never sets an exploit); the actual exploitation event
+# happens later via CONNECT_*. Used by step_block() to end a multi-try block early.
+_PROGRESS_FEATURE: dict[Action, str] = {
+    Action.BRUTE_FORCE_SSH: "creds_found",
+    Action.BRUTE_FORCE_FTP: "creds_found",
+    Action.BRUTE_FORCE_TELNET: "creds_found",
+}
+
+# Single source of truth for the default context_window — scripts/train.py imports this
+# rather than hardcoding its own number, so the two can't silently drift apart.
+DEFAULT_CONTEXT_WINDOW = 3
 
 # Actions that can legitimately earn the terminal exploit reward, mapped to the
 # vulnerability each is "for" — used to withhold credit when an exploit fires
-# under a different action than the one that's supposed to cash it in. Found in
-# practice (full_action_space run, 2026-07-16): policy sampled BRUTE_FORCE_SSH,
-# but the LLM already had credentials from an earlier turn and just connected
-# directly — a real ssh_weak_credentials exploit, credited to the wrong action.
-# BRUTE_FORCE_*/SCAN_PORTS/PROBE_PORT/PROBE_HTTP deliberately excluded: hydra
-# alone only sets creds_found (rl/parser.py's _parse_hydra never fires an
-# ExploitEvent), and CONNECT_* is what's supposed to use the credential —
-# crediting BRUTE_FORCE_* directly would blur that intended two-step chain.
+# under a different action than the one that's supposed to cash it in (e.g. the
+# LLM already had credentials from an earlier turn and connects directly while
+# BRUTE_FORCE_SSH was the sampled action). BRUTE_FORCE_*/SCAN_PORTS/PROBE_PORT/
+# PROBE_HTTP deliberately excluded: hydra alone only sets creds_found (rl/parser.py's
+# _parse_hydra never fires an ExploitEvent), and CONNECT_* is what's supposed to use
+# the credential — crediting BRUTE_FORCE_* directly would blur that intended two-step chain.
 _ACTION_VULNERABILITY: dict[Action, str] = {
     Action.CONNECT_SSH: "ssh_weak_credentials",
     Action.CONNECT_FTP: "ftp_anonymous_login",
@@ -71,37 +66,44 @@ _ACTION_VULNERABILITY: dict[Action, str] = {
     Action.PROBE_MONGO: "mongodb_no_auth",
 }
 
+
 @dataclass
 class EnvironmentConfig:
     container_name: str
     max_steps: int = 40
-    max_engagement_steps: int = 10  # safety cap: ceiling per engagement, not a target length (ADR 014)
     dry_run: bool = False
     timeout: int = 60
     max_output_chars: int = 4000
     model: str = "moonshotai/Kimi-K2.6"
+    context_window: int = DEFAULT_CONTEXT_WINDOW
     api_timeout: int = 60
     reasoning_effort: str | None = None  # e.g. "none" to disable thinking on Qwen models
+    base_url: str = "https://api.deepinfra.com/v1/openai"
+    api_key_env: str = "DEEPINFRA_API_KEY"
 
 
 class Environment:
     """
-    Gym-like RL environment for the attacker agent (ADR 014 Phase 1).
+    Gym-like RL environment for the attacker agent.
 
     Usage::
 
         env = Environment(config)
-        obs = env.reset()                       # also runs the scripted host-discovery scan
-        env.start_engagement(host_ip)            # picked externally — host selection isn't learned yet
-        obs, reward, done, info = env.interact(Action.SCAN_PORTS)
-        # ... keep calling interact() until info["engagement_done"] ...
+        obs = env.reset()
+        obs, reward, done, info = env.step(Action.SCAN_NETWORK, host_idx=0)
     """
 
     def __init__(self, config: EnvironmentConfig) -> None:
         self.config = config
         self._state = EpisodeState()
         self._reward_calc = RewardCalculator()
-        self._client = LLMClient(model=config.model, api_timeout=config.api_timeout, reasoning_effort=config.reasoning_effort)
+        self._client = LLMClient(
+            model=config.model,
+            api_timeout=config.api_timeout,
+            reasoning_effort=config.reasoning_effort,
+            base_url=config.base_url,
+            api_key_env=config.api_key_env,
+        )
         self._executor = Executor(
             config.container_name,
             dry_run=config.dry_run,
@@ -110,14 +112,11 @@ class Environment:
         )
         self._messages: list[dict] = []
         self._step_count: int = 0
-        self._active_host: str | None = None
-        self._engagement_step_count: int = 0
 
     # ── Public interface ──────────────────────────────────────────────────────
 
     def reset(self) -> torch.Tensor:
-        """Start a new episode: clears state, then runs the scripted initial scan
-        to populate the host pool. Returns the resulting observation."""
+        """Start a new episode. Returns the initial observation (all zeros)."""
         if not self.config.dry_run:
             probe = self._executor.execute("echo ok")
             if probe.exit_code != 0:
@@ -130,159 +129,137 @@ class Environment:
         self._messages = build_initial_messages(_INITIAL_TASK)
         self._n_header = len(self._messages)
         self._step_count = 0
-        self._active_host = None
-        self._engagement_step_count = 0
         logger.info("=== Episode reset ===")
-        self._scripted_initial_scan()
         return self._state.to_tensor()
 
-    @property
-    def active_host(self) -> str | None:
-        return self._active_host
-
-    @property
-    def engagement_step_count(self) -> int:
-        """Interaction steps completed so far in the current engagement (0 right
-        after start_engagement()) — the caller passes this into policy.sample()/
-        is_valid() for the ABANDON gate, since it lives outside the state tensor."""
-        return self._engagement_step_count
-
-    def start_engagement(self, host_ip: str) -> None:
-        """Set the active host for the next sequence of interact() calls.
-
-        Resets the LLM message history to just the system/task header — each
-        engagement gets the LLM's full attention on one host's conversation, not a
-        small rolling window sliding across the whole episode's unrelated hosts
-        (the cause of a real bug: a re-engaged host's already-open port got
-        re-verified from scratch because the window had evicted it in favor of a
-        different host's exchanges). Bounded naturally by max_engagement_steps —
-        no separate pruning needed within an engagement.
-        """
-        if host_ip not in self._state.known_hosts():
-            raise ValueError(f"Cannot start engagement on unknown host {host_ip!r}")
-        self._active_host = host_ip
-        self._engagement_step_count = 0
-        self._state.set(host_ip, "engagement_progress", 0.0)
-        self._messages = self._messages[:self._n_header]
-
-    def _update_engagement_progress(self) -> None:
-        """0..1, how far the active host's engagement is through its safety cap —
-        lets the policy sense urgency instead of treating every interaction step
-        as if it had unlimited time. Stale (not reset) on a host between
-        engagements once it's no longer active — known, accepted imprecision."""
-        progress = min(self._engagement_step_count / self.config.max_engagement_steps, 1.0)
-        self._state.set(self._active_host, "engagement_progress", progress)
-
-    def interact(self, action: Action) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
-        """
-        Execute one interaction step against the currently active host (set via
-        start_engagement()). Returns the standard (obs, reward, done, info) Gym
-        contract — `done` is the episode-level signal (global max_steps).
-
-        info["engagement_done"] is True when this step ended the current engagement
-        — an ExploitEvent fired, ABANDON was sampled, or the per-engagement safety
-        cap was hit. The caller should return to host selection when set. A skipped
-        try (LLM error, timeout) does NOT end the engagement — the same host stays
-        active for the next interaction step, though it still counts against the
-        safety cap.
-        """
-        if self._active_host is None:
-            raise RuntimeError("interact() called with no active engagement — call start_engagement() first")
-        ip = self._active_host
-
-        if action == Action.ABANDON:
-            reward = self._reward_calc.step()
-            self._step_count += 1
-            self._engagement_step_count += 1
-            self._update_engagement_progress()
-            done = self._step_count >= self.config.max_steps
-            logger.info(
-                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f",
-                self._step_count, self.config.max_steps, action.name, ip, len(self._state.known_hosts()), reward,
+    def _log_transcript(
+        self, action: Action, ip: str | None, reward: float, *,
+        reasoning: str = "", content: str = "", command: str = "",
+        output: str = "", exploit: Any = None, skip: str | None = None,
+    ) -> None:
+        """Emit one human-readable block to the transcript stream, pairing the RL
+        action with what the LLM actually reasoned and ran — the artifact for
+        auditing action/command mismatch."""
+        if skip:
+            transcript_logger.info(
+                "── Step %d  action=%s  host=%s  reward=%+.1f  SKIP=%s",
+                self._step_count, action.name, ip or "-", reward, skip,
             )
-            self._log_transcript(action, ip, reward, command="(abandon — no command issued)")
-            self._active_host = None
-            return self._state.to_tensor(), reward, done, {
-                "step": self._step_count, "action": action.name, "host": ip,
-                "exploit": None, "engagement_done": True,
-            }
-
-        reward, info = self._try_once(action, ip)
-        self._engagement_step_count += 1
-        done = self._step_count >= self.config.max_steps
-
-        # Pool removal and engagement-end key off "did the active host genuinely
-        # get compromised" (info["compromised"]), not "did this step earn reward"
-        # (info["exploit"]) — a wrong-action exploit still removes the host and
-        # ends the engagement, it just doesn't pay the sampled action.
-        compromised = info.get("compromised", False)
-        if compromised:
-            self._state.remove(ip)  # must come after any state.set() calls on ip — remove() would be undone by re-adding
-        else:
-            self._update_engagement_progress()
-
-        cap_hit = self._engagement_step_count >= self.config.max_engagement_steps
-        engagement_done = compromised or cap_hit
-        if engagement_done:
-            self._active_host = None
-
-        return self._state.to_tensor(), reward, done, {**info, "engagement_done": engagement_done}
-
-    def _scripted_initial_scan(self) -> None:
-        """Auto-run at reset() to populate the host pool. Not a policy decision and
-        not part of the step budget or reward (ADR 014).
-
-        Loops up to _INITIAL_SCAN_MAX_TRIES exchanges rather than a single shot: a
-        reasonable agent's first move for "discover the subnet" is often checking
-        its own network config before running the actual scan, so one exchange
-        frequently finds zero hosts without anything being wrong — nudge with a
-        follow-up and try again. The same budget also absorbs transient LLM-call
-        failures (timeouts, rate limits) — a 429 here used to crash the whole
-        training run instead of just costing a retry, since this path predates
-        _try_once()'s broader exception handling. Only raises once every attempt
-        has failed or found nothing; that's a hard error, not a skip, since an
-        empty pool means no engagement is possible for the whole episode and
-        absorbing the failure would silently waste the run.
-        """
-        instruction = _INITIAL_SCAN_INSTRUCTION
-        for attempt in range(1, _INITIAL_SCAN_MAX_TRIES + 1):
-            self._messages.append({"role": "user", "content": instruction})
-            try:
-                request = self._client.complete(self._messages)
-            except Exception as exc:
-                self._messages.pop()  # remove the dangling instruction; keeps history well-formed
-                logger.warning(
-                    "Initial scan attempt %d/%d failed, retrying: %s",
-                    attempt, _INITIAL_SCAN_MAX_TRIES, exc,
-                )
-                continue
-            self._messages.append(request.assistant_message)
-            result = self._executor.execute(request.command)
-            self._messages.append({
-                "role": "tool",
-                "tool_call_id": request.tool_call_id,
-                "content": format_tool_result(result),
-            })
-            parsed = parse_step(request.command, result.output, result.exit_code)
-            for host_ip, features in parsed.state_updates:
-                self._state.update(host_ip, features)
-
-            if self._state.known_hosts():
-                logger.info(
-                    "Initial scan: discovered %d host(s) (attempt %d/%d)",
-                    len(self._state.known_hosts()), attempt, _INITIAL_SCAN_MAX_TRIES,
-                )
-                return
-            instruction = _INITIAL_SCAN_FOLLOWUP
-
-        raise RuntimeError(
-            f"Scripted initial scan found no hosts after {_INITIAL_SCAN_MAX_TRIES} attempts "
-            "(each attempt may have failed outright or just found nothing — check train.log's "
-            "'Initial scan attempt N/M failed' warnings vs. train.debug.log for the commands "
-            "the LLM ran to tell which)."
+            return
+        thinking = reasoning or content or "(none)"
+        snippet = output if len(output) <= _TRANSCRIPT_OUTPUT_CHARS else output[:_TRANSCRIPT_OUTPUT_CHARS] + " …[truncated]"
+        exploit_str = f"  exploit={exploit.vulnerability}" if exploit else ""
+        transcript_logger.info(
+            "── Step %d  action=%s  host=%s  reward=%+.1f%s\n"
+            "   thinking: %s\n   command: %s\n   output: %s",
+            self._step_count, action.name, ip or "-", reward, exploit_str,
+            thinking, command, snippet,
         )
 
-    def _try_once(self, action: Action, ip: str) -> tuple[float, dict[str, Any]]:
+    @staticmethod
+    def _host_label(action: Action, ip: str | None) -> str:
+        if action == Action.DO_NOTHING:
+            return "no_host"
+        if action == Action.SCAN_NETWORK:
+            return "all_hosts"
+        return ip or "unknown"
+
+    def step(
+        self, action: Action, host_idx: int
+    ) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
+        """
+        Execute one RL step — a block of exactly one try. See step_block() for the
+        multi-try version driven by the policy's duration head.
+
+        action   — the Action enum value chosen by the policy
+        host_idx — index into state.known_hosts() (ignored for broadcast actions)
+
+        Returns (obs, reward, done, info).
+        info keys: step, action, host, command, exit_code, exploit, truncated, tries_used
+        """
+        return self.step_block(action, host_idx, max_tries=1)
+
+    def step_block(
+        self, action: Action, host_idx: int, max_tries: int = 1
+    ) -> tuple[torch.Tensor, float, bool, dict[str, Any]]:
+        """
+        Execute up to max_tries consecutive primitive commands against the same
+        (action, host), stopping early once that action's goal is met:
+
+        - BRUTE_FORCE_SSH/FTP/TELNET never emit an ExploitEvent themselves (see
+          docs/features/rl-parser.md) — their goal is creds_found becoming true.
+        - Every other action's goal is its ExploitEvent firing.
+
+        A skip on the first try (LLM error, invalid host) ends the block exactly like
+        a single step() skip today, contributing nothing to training. A skip on a later
+        try keeps whatever real reward was already earned and ends the block there.
+
+        Returns (obs, block_reward, done, info), where block_reward is the sum of the
+        rewards from however many tries actually ran, and info carries the same keys
+        as a single try's info plus "tries_used".
+        """
+        ip = self._resolve_host(action, host_idx)
+        if ip is None and action not in BROADCAST_ACTIONS:
+            # host_idx out of range — skip gracefully
+            reward = self._reward_calc.step()
+            self._step_count += 1
+            done = self._step_count >= self.config.max_steps
+            logger.info(
+                "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=invalid_host_idx",
+                self._step_count, self.config.max_steps,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
+            )
+            return self._state.to_tensor(), reward, done, {
+                "step": self._step_count,
+                "skip": "invalid_host_idx",
+                "tries_used": 1,
+            }
+
+        progress_feature = _PROGRESS_FEATURE.get(action)
+        block_reward = 0.0
+        last_real_info: dict[str, Any] = {}
+        done = False
+
+        def _log_block_summary(tries_used: int, skip: str | None = None) -> None:
+            suffix = f"  skip={skip}" if skip else ""
+            logger.info(
+                "  └─ block: %-20s tries=%d/%d  block_reward=%+.1f%s",
+                action.name, tries_used, max_tries, block_reward, suffix,
+            )
+
+        for tries_used in range(1, max_tries + 1):
+            reward, info = self._try_once(action, ip)
+            block_reward += reward
+            done = self._step_count >= self.config.max_steps
+
+            if info.get("skip"):
+                if tries_used == 1:
+                    # Whole block failed to execute at all — report as a plain skip,
+                    # matching step()'s single-try behaviour exactly (excluded from training).
+                    _log_block_summary(tries_used, skip=info["skip"])
+                    return self._state.to_tensor(), block_reward, done, {**info, "tries_used": tries_used}
+                # Later skip: keep the reward already earned, but don't propagate the
+                # "skip" key — real tries happened, so this block *should* still be
+                # trained on. Report the last real try's info instead.
+                _log_block_summary(tries_used, skip=info["skip"])
+                # last_real_info["step"] is stale — it's from the try before this one, but
+                # self._step_count already advanced past the skipped try too.
+                return self._state.to_tensor(), block_reward, done, {
+                    **last_real_info, "step": self._step_count, "tries_used": tries_used,
+                }
+
+            last_real_info = info
+            if info.get("exploit") is not None:
+                break
+            if progress_feature is not None and ip is not None and self._state.get(ip, progress_feature):
+                break
+            if done:
+                break
+
+        _log_block_summary(tries_used)
+        return self._state.to_tensor(), block_reward, done, {**last_real_info, "tries_used": tries_used}
+
+    def _try_once(self, action: Action, ip: str | None) -> tuple[float, dict[str, Any]]:
         """Execute a single primitive command for (action, ip). Returns (reward, info)."""
         instruction = _action_to_instruction(action, ip)
         self._messages.append({"role": "user", "content": instruction})
@@ -298,19 +275,19 @@ class Environment:
             logger.info(
                 "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=%s",
                 self._step_count, self.config.max_steps,
-                action.name, ip, len(self._state.known_hosts()), reward, skip,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward, skip,
             )
             self._log_transcript(action, ip, reward, skip=skip)
             return reward, {"step": self._step_count, "skip": skip}
         except Exception as exc:
             self._messages.pop()
-            logger.exception("Unexpected error in interact(), skipping: %s", exc)
+            logger.exception("Unexpected error in step(), skipping: %s", exc)
             reward = self._reward_calc.step()
             self._step_count += 1
             logger.info(
                 "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f  skip=unexpected_error",
                 self._step_count, self.config.max_steps,
-                action.name, ip, len(self._state.known_hosts()), reward,
+                action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
             self._log_transcript(action, ip, reward, skip="unexpected_error")
             return reward, {"step": self._step_count, "skip": "unexpected_error"}
@@ -323,6 +300,7 @@ class Environment:
             "tool_call_id": request.tool_call_id,
             "content": format_tool_result(result),
         })
+        self._prune_messages()
 
         parsed = parse_step(request.command, result.output, result.exit_code)
 
@@ -337,28 +315,24 @@ class Environment:
         for host_ip, features in parsed.state_updates:
             self._state.update(host_ip, features)
 
-        self._state.mark_tried(ip, action)
+        if ip is not None:
+            self._state.mark_tried(ip, action)
 
-        # The LLM's command can name any host regardless of which one is currently
-        # active (parsed.exploit.host comes from a regex over the command string, not
-        # from `ip`). Crediting that to the action the policy actually sampled would
-        # reinforce the wrong pair for a result it didn't cause — so an exploit only
-        # counts here if it landed on the host this engagement is targeting.
+        # The LLM's command can name any host regardless of which one host_idx
+        # resolved to (parsed.exploit.host comes from a regex over the command string,
+        # not from `ip`). Crediting that to the (host_slot, action) the policy actually
+        # sampled would reinforce the wrong pair for a result it didn't cause — so an
+        # exploit only counts here if it landed on the host this step targeted.
         wrong_host = parsed.exploit is not None and parsed.exploit.host != ip
-
-        # Did the active host genuinely get compromised this step? Drives pool
-        # removal and engagement-end below, regardless of reward — the world state
-        # is real (shell_access really happened) even when the RL shouldn't get
-        # credit for it (see wrong_action next).
-        compromised = parsed.exploit is not None and not wrong_host and not already_exploited
 
         # Reward only if the exploit that fired is the one this action is actually
         # "for" (_ACTION_VULNERABILITY above) — e.g. a real ssh_weak_credentials
         # exploit under BRUTE_FORCE_SSH still doesn't get credited, since that's
         # CONNECT_SSH's job. Independent of wrong_host: this only applies once an
         # exploit has already passed the host check.
-        wrong_action = compromised and _ACTION_VULNERABILITY.get(action) != parsed.exploit.vulnerability
-        exploit = parsed.exploit if compromised and not wrong_action else None
+        landed = parsed.exploit is not None and not wrong_host and not already_exploited
+        wrong_action = landed and _ACTION_VULNERABILITY.get(action) != parsed.exploit.vulnerability
+        exploit = parsed.exploit if landed and not wrong_action else None
         reward = self._reward_calc.step(exploit)
         self._step_count += 1
 
@@ -369,24 +343,23 @@ class Environment:
             "command": request.command,
             "exit_code": result.exit_code,
             "exploit": exploit,
-            "compromised": compromised,
             "truncated": result.truncated,
         }
         logger.debug("cmd=%r exit=%d truncated=%s", request.command, result.exit_code, result.truncated)
         if wrong_host:
             logger.info(
-                "  └─ exploit on %s ignored — engagement targeted %s (action=%s)",
+                "  └─ exploit on %s ignored — step targeted %s (action=%s)",
                 parsed.exploit.host, ip, action.name,
             )
         if wrong_action:
             logger.info(
-                "  └─ %s exploit ignored for reward — action=%s doesn't earn it (host still compromised)",
+                "  └─ %s exploit ignored for reward — action=%s doesn't earn it",
                 parsed.exploit.vulnerability, action.name,
             )
         logger.info(
             "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f%s",
             self._step_count, self.config.max_steps,
-            action.name, ip, len(self._state.known_hosts()), reward,
+            action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             f"  exploit={exploit.vulnerability}" if exploit else "",
         )
         self._log_transcript(
@@ -396,38 +369,35 @@ class Environment:
         )
         return reward, info
 
-    def _log_transcript(
-        self, action: Action, ip: str, reward: float, *,
-        reasoning: str = "", content: str = "", command: str = "",
-        output: str = "", exploit: Any = None, skip: str | None = None,
-    ) -> None:
-        """Emit one human-readable block to the transcript stream, pairing the RL
-        action with what the LLM actually reasoned and ran — the artifact for
-        auditing action/command mismatch."""
-        if skip:
-            transcript_logger.info(
-                "── Step %d  action=%s  host=%s  reward=%+.1f  SKIP=%s",
-                self._step_count, action.name, ip, reward, skip,
-            )
-            return
-        thinking = reasoning or content or "(none)"
-        snippet = output if len(output) <= _TRANSCRIPT_OUTPUT_CHARS else output[:_TRANSCRIPT_OUTPUT_CHARS] + " …[truncated]"
-        exploit_str = f"  exploit={exploit.vulnerability}" if exploit else ""
-        transcript_logger.info(
-            "── Step %d  action=%s  host=%s  reward=%+.1f%s\n"
-            "   thinking: %s\n   command: %s\n   output: %s",
-            self._step_count, action.name, ip, reward, exploit_str,
-            thinking, command, snippet,
-        )
-
     @property
     def step_count(self) -> int:
         return self._step_count
 
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _prune_messages(self) -> None:
+        """Trim message history to the last context_window complete exchanges."""
+        variable = self._messages[self._n_header:]
+        max_msgs = self.config.context_window * 3
+        if len(variable) > max_msgs:
+            self._messages = self._messages[:self._n_header] + variable[-max_msgs:]
+
+    def _resolve_host(self, action: Action, host_idx: int) -> str | None:
+        if action in BROADCAST_ACTIONS:
+            return None
+        hosts = self._state.known_hosts()
+        if host_idx < len(hosts):
+            return hosts[host_idx]
+        return None
+
 # ── Action → natural-language instruction ────────────────────────────────────
 
-def _action_to_instruction(action: Action, ip: str) -> str:
+def _action_to_instruction(action: Action, ip: str | None) -> str:
     match action:
+        case Action.DO_NOTHING:
+            return "Do nothing this step. Run 'echo ok' to acknowledge."
+        case Action.SCAN_NETWORK:
+            return "Discover all live hosts on the local subnet."
         case Action.SCAN_PORTS:
             return f"Scan the most common ports on {ip} to identify open services."
         case Action.PROBE_PORT:

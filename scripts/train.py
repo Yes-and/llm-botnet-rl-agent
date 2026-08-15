@@ -27,7 +27,7 @@ import yaml
 from dotenv import load_dotenv
 
 from rl.actions import Action
-from rl.environment import Environment, EnvironmentConfig
+from rl.environment import DEFAULT_CONTEXT_WINDOW, Environment, EnvironmentConfig
 from rl.logging_setup import setup_logging
 from rl.policy import Policy
 
@@ -48,25 +48,14 @@ def _git_commit() -> str:
         return "unknown"
 
 
-def _compute_returns(engagement_rewards: list[list[float]], gamma: float) -> torch.Tensor:
-    """Discounted returns, reset to zero at each engagement boundary (ADR 014).
-
-    Each inner list is one engagement's non-skip rewards in order. The discounted
-    return is computed independently per engagement and the results concatenated —
-    an exploit on host B never backpropagates into a previous engagement on host A.
-    This is the credit-assignment fix ADR 014 exists for (Context #2: cross-host
-    reward bleed under a single episode-wide return).
-    """
-    all_returns: list[float] = []
-    for rewards in engagement_rewards:
-        G = 0.0
-        segment_returns: list[float] = []
-        for r in reversed(rewards):
-            G = r + gamma * G
-            segment_returns.append(G)
-        segment_returns.reverse()
-        all_returns.extend(segment_returns)
-    return torch.tensor(all_returns, dtype=torch.float32)
+def _compute_returns(rewards: list[float], gamma: float) -> torch.Tensor:
+    G = 0.0
+    returns: list[float] = []
+    for r in reversed(rewards):
+        G = r + gamma * G
+        returns.append(G)
+    returns.reverse()
+    return torch.tensor(returns, dtype=torch.float32)
 
 
 def _visitation_bonus(count: int) -> float:
@@ -105,8 +94,9 @@ if __name__ == "__main__":
 
     # ── Preflight checks ─────────────────────────────────────────────────────
 
-    if not os.environ.get("DEEPINFRA_API_KEY"):
-        raise RuntimeError("DEEPINFRA_API_KEY is not set. Add it to .env before training.")
+    api_key_env = raw.get("api_key_env", "DEEPINFRA_API_KEY")
+    if not os.environ.get(api_key_env):
+        raise RuntimeError(f"{api_key_env} is not set. Add it to .env before training.")
 
     # ── Seeds ─────────────────────────────────────────────────────────────────
 
@@ -129,21 +119,34 @@ if __name__ == "__main__":
     env_config = EnvironmentConfig(
         container_name=raw["container_name"],
         max_steps=raw.get("max_steps", 40),
-        max_engagement_steps=raw.get("max_engagement_steps", 10),
         dry_run=raw.get("dry_run", False),
         timeout=raw.get("timeout", 60),
         max_output_chars=raw.get("max_output_chars", 4000),
         model=raw.get("model", "moonshotai/Kimi-K2.6"),
+        context_window=raw.get("context_window", DEFAULT_CONTEXT_WINDOW),
         api_timeout=raw.get("api_timeout", 60),
         reasoning_effort=raw.get("reasoning_effort", None),
+        base_url=raw.get("base_url", "https://api.deepinfra.com/v1/openai"),
+        api_key_env=api_key_env,
     )
     env = Environment(env_config)
 
     policy = Policy(
         hidden_dim=raw.get("hidden_dim", 128),
         num_layers=raw.get("num_layers", 2),
-        full_action_space=raw.get("full_action_space", False),
+        conditioned_action_head=raw.get("conditioned_action_head", False),
+        duration_options=raw.get("duration_options"),
     )
+
+    # A duration block longer than context_window would lose visibility into its own
+    # earlier tries mid-block (see ADR 011) — fail at startup rather than silently
+    # wasting a training run.
+    if env_config.context_window < max(policy.duration_options):
+        raise ValueError(
+            f"context_window ({env_config.context_window}) must be >= the largest "
+            f"duration_options value ({max(policy.duration_options)}), or a multi-try "
+            "block can be pruned out of its own context before it finishes. See ADR 011."
+        )
 
     optimizer = torch.optim.Adam(policy.parameters(), lr=raw.get("learning_rate", 1e-3))
 
@@ -178,7 +181,8 @@ if __name__ == "__main__":
     logger.info("Run metadata written: commit=%s", metadata["git_commit"])
 
     _ACTION_COLS = [f"act_{a.name.lower()}" for a in Action]
-    _CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "engagements", "elapsed_s", "entropy", "visitation_bonus_sum"] + _ACTION_COLS
+    _TRIES_COLS = [f"tries_{a.name.lower()}" for a in Action]
+    _CSV_FIELDS = ["episode", "total_reward", "loss", "exploit_count", "elapsed_s", "entropy", "visitation_bonus_sum"] + _ACTION_COLS + _TRIES_COLS
 
     _csv_mode = "a" if (args.resume and (results_dir / "rewards.csv").exists()) else "w"
     _rewards_csv = open(results_dir / "rewards.csv", _csv_mode, newline="")
@@ -187,7 +191,7 @@ if __name__ == "__main__":
         _csv_writer.writeheader()
     _rewards_csv.flush()
 
-    _STEPS_FIELDS = ["episode", "step", "host", "action", "reward", "engagement_done", "visitation_count", "visitation_bonus"]
+    _STEPS_FIELDS = ["episode", "step", "action", "reward", "tries_used", "visitation_count", "visitation_bonus"]
     _steps_csv = open(results_dir / "steps.csv", _csv_mode, newline="")
     _steps_writer = csv.DictWriter(_steps_csv, fieldnames=_STEPS_FIELDS)
     if _csv_mode == "w":
@@ -202,7 +206,7 @@ if __name__ == "__main__":
     print(f"Episodes:    {num_episodes}  steps/ep={env_config.max_steps}")
     print(f"Model:       {env_config.model}")
     print(f"Policy:      hidden_dim={raw.get('hidden_dim', 128)}  num_layers={raw.get('num_layers', 2)}")
-    print(f"Engagement:  max_engagement_steps={env_config.max_engagement_steps}  full_action_space={policy.full_action_space}")
+    print(f"Duration:    options={policy.duration_options}  context_window={env_config.context_window}")
     print(f"γ={gamma}  lr={raw.get('learning_rate', 1e-3)}  baseline={use_baseline}  entropy_coeff={entropy_coeff}  visitation_bonus_coeff={visitation_bonus_coeff}")
     print(f"Seeds:       python={seed_python}  torch={seed_torch}")
     print(f"Resume:      {args.resume or 'no'}  (starting at episode {resume_episode + 1})")
@@ -223,65 +227,51 @@ if __name__ == "__main__":
         transcript_logger.info("═══════════════ Episode %d ═══════════════", episode)
 
         log_probs: list[torch.Tensor] = []
-        engagement_rewards: list[list[float]] = []  # one sub-list per engagement (ADR 014 return scoping)
-        intrinsic_rewards: list[list[float]] = []  # parallel to engagement_rewards, visitation bonus stream
+        rewards: list[float] = []
+        intrinsic_rewards: list[float] = []  # parallel to rewards, visitation bonus stream
         exploits: list[str] = []
         entropies: list[float] = []
         action_counts: Counter = Counter()
-        engagement_count = 0
+        tries_counts: Counter = Counter()
 
         done = False
         while not done:
-            hosts = env._state.known_hosts()
-            if not hosts:
-                break  # pool exhausted — nothing left to engage this episode
+            known_host_count = len(env._state.known_hosts())
+            action, host_slot, duration, log_prob, entropy = policy.sample(state, known_host_count)
 
-            # Phase 1 (ADR 014): host selection isn't learned yet — pick uniformly at
-            # random. Phase 2 replaces this with a trained host head.
-            host_ip = random.choice(hosts)
-            env.start_engagement(host_ip)  # zeros engagement_progress in-place — refresh state below
-            state = env._state.to_tensor()
-            host_idx = hosts.index(host_ip)
-            engagement_count += 1
-            current_rewards: list[float] = []
-            current_intrinsic: list[float] = []
+            # host_slot 0 (no_host) and 1 (all_hosts) are broadcast — host_idx is ignored
+            host_idx = max(0, host_slot - 2)
 
-            engagement_done = False
-            while not engagement_done and not done:
-                action, log_prob, entropy = policy.sample(state, host_idx, env.engagement_step_count)
-                state, reward, done, info = env.interact(action)
+            # One block (up to `duration` consecutive tries of the same action/host) is
+            # one decision from the policy's perspective — it gets exactly one log_prob
+            # and one aggregated reward below, whatever its real try count turned out to be.
+            state, reward, done, info = env.step_block(action, host_idx, duration)
 
-                skip = info.get("skip")
-                # Counted regardless of skip — the policy still chose this action even
-                # if the LLM call downstream failed to produce a usable command.
-                visitation_counts[action] += 1
-                bonus = _visitation_bonus(visitation_counts[action])
-                if not skip:
-                    log_probs.append(log_prob)
-                    current_rewards.append(reward)
-                    current_intrinsic.append(bonus)
-                    entropies.append(entropy.item())
-                    action_counts[action] += 1
-                    if info.get("exploit"):
-                        exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
+            skip = info.get("skip")
+            # Counted regardless of skip — the policy still chose this action even
+            # if the LLM call downstream failed to produce a usable command.
+            visitation_counts[action] += 1
+            bonus = _visitation_bonus(visitation_counts[action])
+            if not skip:
+                log_probs.append(log_prob)
+                rewards.append(reward)
+                intrinsic_rewards.append(bonus)
+                entropies.append(entropy.item())
+                action_counts[action] += 1
+                tries_counts[action] += info["tries_used"]
+                if info.get("exploit"):
+                    exploits.append(f"{info['host']} ({info['exploit'].vulnerability})")
 
-                action_label = action.name if not skip else skip.upper()
-                _steps_writer.writerow({
-                    "episode": episode, "step": info["step"], "host": host_ip,
-                    "action": action_label, "reward": reward,
-                    "engagement_done": info["engagement_done"],
-                    "visitation_count": visitation_counts[action],
-                    "visitation_bonus": round(bonus, 6),
-                })
+            action_label = action.name if not skip else skip.upper()
+            _steps_writer.writerow({
+                "episode": episode, "step": info["step"], "action": action_label,
+                "reward": reward, "tries_used": info["tries_used"],
+                "visitation_count": visitation_counts[action],
+                "visitation_bonus": round(bonus, 6),
+            })
 
-                engagement_done = info["engagement_done"]
-
-            if current_rewards:
-                engagement_rewards.append(current_rewards)
-                intrinsic_rewards.append(current_intrinsic)
-
-        # Discounted returns, reset at each engagement boundary
-        returns = _compute_returns(engagement_rewards, gamma)
+        # Discounted returns
+        returns = _compute_returns(rewards, gamma)
         if use_baseline:
             returns = returns - returns.mean()
         if visitation_bonus_coeff > 0.0:
@@ -302,8 +292,8 @@ if __name__ == "__main__":
             )
         optimizer.step()
 
-        total_reward = sum(r for segment in engagement_rewards for r in segment)
-        visitation_bonus_sum = sum(b for segment in intrinsic_rewards for b in segment)
+        total_reward = sum(rewards)
+        visitation_bonus_sum = sum(intrinsic_rewards)
         episode_rewards.append(total_reward)
         ep_elapsed = time.time() - ep_start
         mean_entropy = sum(entropies) / len(entropies) if entropies else 0.0
@@ -322,11 +312,11 @@ if __name__ == "__main__":
             "total_reward": round(total_reward, 2),
             "loss": round(loss.item(), 6),
             "exploit_count": len(exploits),
-            "engagements": engagement_count,
             "elapsed_s": round(ep_elapsed, 1),
             "entropy": round(mean_entropy, 4),
             "visitation_bonus_sum": round(visitation_bonus_sum, 4),
             **{f"act_{a.name.lower()}": action_counts.get(a, 0) for a in Action},
+            **{f"tries_{a.name.lower()}": tries_counts.get(a, 0) for a in Action},
         })
         _rewards_csv.flush()
         _steps_csv.flush()

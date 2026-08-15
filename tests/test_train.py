@@ -17,16 +17,8 @@ def test_visitation_bonus_monotonically_decreasing():
     assert bonuses == sorted(bonuses, reverse=True)
 
 
-def test_compute_returns_single_engagement_discounting():
-    # one engagement, rewards [1, 1, 1] with gamma=0.5:
+def test_compute_returns_discounting():
+    # rewards [1, 1, 1] with gamma=0.5:
     # G2 = 1, G1 = 1 + 0.5*1 = 1.5, G0 = 1 + 0.5*1.5 = 1.75
-    returns = _compute_returns([[1.0, 1.0, 1.0]], gamma=0.5)
+    returns = _compute_returns([1.0, 1.0, 1.0], gamma=0.5)
     assert returns.tolist() == pytest.approx([1.75, 1.5, 1.0])
-
-
-def test_compute_returns_resets_at_engagement_boundary():
-    # two engagements — the second must NOT see credit bleed from the first,
-    # i.e. its returns are identical whether or not the first engagement exists.
-    returns = _compute_returns([[1.0, 1.0], [1.0, 1.0]], gamma=0.5)
-    solo = _compute_returns([[1.0, 1.0]], gamma=0.5)
-    assert returns.tolist()[2:] == pytest.approx(solo.tolist())

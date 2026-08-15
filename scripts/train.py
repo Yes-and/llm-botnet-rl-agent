@@ -3,7 +3,7 @@ REINFORCE training loop.
 
 Collects full episodes, computes discounted returns, and updates the policy
 with a Monte Carlo policy gradient step. Checkpoints are saved to
-experiments/results/<run_id>/ every save_every episodes.
+experiments/results/<scenario>/<run_id>/ every save_every episodes.
 
 Usage:
     python scripts/train.py experiments/configs/s002-train-001.yml
@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import random
+import re
 import subprocess
 import time
 from collections import Counter
@@ -83,7 +84,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="REINFORCE training loop.")
     parser.add_argument("config", type=Path, help="Path to YAML training config")
-    parser.add_argument("--log-file", default=None, help="Log file path (default: results_dir/<run_id>/train.log)")
+    parser.add_argument("--log-file", default=None, help="Log file path (default: results_dir/<scenario>/<run_id>/train.log)")
     parser.add_argument("--resume", type=Path, default=None, help="Path to checkpoint .pt file to resume from")
     args = parser.parse_args()
 
@@ -108,7 +109,13 @@ if __name__ == "__main__":
     # ── Results dir ───────────────────────────────────────────────────────────
 
     run_id = args.config.stem
-    results_dir = Path(raw.get("results_dir", "experiments/results")) / run_id
+    # Nest under the scenario number (e.g. "s003"), same spirit as the case-study
+    # track's <scenario>-<exploit> folders (scripts/case_study_common.py) — RL
+    # configs don't name a single exploit type (multi-target scenarios), so
+    # scenario-only grouping is the natural equivalent, not a ported regex.
+    scenario_match = re.match(r"^(s\d+)-", run_id)
+    scenario = scenario_match.group(1) if scenario_match else run_id
+    results_dir = Path(raw.get("results_dir", "experiments/results")) / scenario / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = args.log_file or str(results_dir / "train.log")

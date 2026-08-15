@@ -63,7 +63,7 @@ All environment fields from `EnvironmentConfig` are also required (`container_na
 
 ## Checkpoints
 
-Saved to `experiments/results/<config-stem>/checkpoint_ep<N>.pt`. Each checkpoint contains:
+Saved to `experiments/results/<scenario>/<config-stem>/checkpoint_ep<N>.pt` — nested under the scenario number (e.g. `s003`) parsed from the config filename, same spirit as the case-study track's `<scenario>-<exploit>/` folders (`docs/features/scenario-*.md`), just scenario-only since an RL config targets a whole multi-target scenario, not one exploit type. A config that doesn't start with `s<digits>-` falls back to using its own stem as the scenario folder too (a harmless no-op nesting, not an error). Each checkpoint contains:
 - `policy_state_dict` — network weights
 - `optimizer_state_dict` — Adam state
 - `episode` — episode number at save time
@@ -89,7 +89,7 @@ Since one `steps.csv` row covers a whole multi-try block (ADR 011) but is logged
 
 ```bash
 python scripts/train.py experiments/configs/s002-train-001.yml
-# Log defaults to experiments/results/<run_id>/train.log
+# Log defaults to experiments/results/<scenario>/<run_id>/train.log
 
 python scripts/train.py experiments/configs/s002-train-001.yml --log-file custom.log
 ```

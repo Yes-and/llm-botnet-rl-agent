@@ -38,13 +38,15 @@ The caller (environment) is responsible for deduplicating `ExploitEvent`s — th
 Handles both output formats. Partial output from timed-out scans is still parsed — exit code is ignored.
 
 **Grepable format (`-oG -`):**
-- `Host: <ip> (...) Status: Up` → sets `is_alive`
-- `Host: <ip> (...) Ports: <port>/open/tcp//<service>//...` → sets `port_*_open` and `service_*`
+- `Host: <ip> (<hostname>) Status: Up` → sets `is_alive`, **unless `<hostname>` is empty**
+- `Host: <ip> (<hostname>) Ports: <port>/open/tcp//<service>//...` → sets `port_*_open` and `service_*`, same exclusion
 
 **Human-readable format (no `-oG`):**
-- `Nmap scan report for <ip>` + `Host is up` → sets `is_alive`
+- `Nmap scan report for [<hostname> (]<ip>[)]` + `Host is up` → sets `is_alive`, same exclusion
 
 Port details are not extracted from human-readable output; use grepable format for port scanning steps.
+
+**Docker infrastructure exclusion:** a host with no reverse-DNS hostname (empty parens in grepable format, or a bare IP with no hostname prefix in human-readable format) is treated as Docker network infrastructure — typically the bridge gateway, conventionally the subnet's `.1` address — rather than a real scenario container, and is dropped instead of being added to state. Real containers started by Compose always resolve to their service DNS name (e.g. `s003_host11.scenario-003_s003_net`); the gateway never does. Without this, a wasted `SCAN_NETWORK`/`SCAN_PORTS`/`PROBE_PORT` pick against the gateway is cheap once (nothing exploitable there, so it just eats a step penalty) but the phantom host also never leaves the pool (nothing ever exploits it), so it can be repeatedly re-selected across an episode. Found from a real smoke-test run where `172.21.0.1` (the gateway) consumed 7 of 20 total steps this way before the fix.
 
 ## hydra
 

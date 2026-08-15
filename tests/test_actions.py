@@ -34,11 +34,18 @@ def test_connect_requires_creds_and_service():
     assert not is_valid(Action.CONNECT_SSH, {"service_ssh": True})
     assert is_valid(Action.CONNECT_SSH, {"creds_found": True, "service_ssh": True})
 
-    assert not is_valid(Action.CONNECT_FTP, {"creds_found": True})
-    assert is_valid(Action.CONNECT_FTP, {"creds_found": True, "service_ftp": True})
-
     assert not is_valid(Action.CONNECT_TELNET, {"creds_found": True})
     assert is_valid(Action.CONNECT_TELNET, {"creds_found": True, "service_telnet": True})
+
+
+def test_connect_ftp_requires_only_service_no_creds():
+    """FTP's exploitable path here is anonymous login — no credential is ever
+    discovered for it, so unlike SSH/Telnet, CONNECT_FTP must not require
+    creds_found or it's unreachable for the anonymous host."""
+    assert not is_valid(Action.CONNECT_FTP, {})
+    assert not is_valid(Action.CONNECT_FTP, {"creds_found": True})
+    assert is_valid(Action.CONNECT_FTP, {"service_ftp": True})
+    assert is_valid(Action.CONNECT_FTP, {"service_ftp": True, "creds_found": True})
 
 
 def test_probe_http_requires_port_80_or_443():

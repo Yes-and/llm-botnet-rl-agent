@@ -8,14 +8,21 @@
 
 ## Logging Setup
 
-`setup_logging(log_file)` installs two handlers on the root logger:
+`setup_logging(log_file)` installs three handlers on the root logger plus a
+dedicated, non-propagating handler for the transcript stream:
 
-| Handler | Level | Filter | Format |
+| Stream | Level | Filter | Purpose |
 |---|---|---|---|
-| Console (stdout) | INFO | `rl.*` loggers only | `%(message)s` — one clean line per step |
-| File | DEBUG | all loggers | `%(asctime)s %(levelname)-8s %(name)s | %(message)s` |
+| Console (stdout) | INFO | `rl.*` only | One clean line per step |
+| `train.log` | INFO | `rl.*` + `agent.*` | Step lines, episode summaries, warnings, errors |
+| `train.transcript.log` | INFO | `rl.transcript` only (no propagate) | One human-readable block per interaction step: sampled action, model thinking, issued command, output snippet, reward |
+| `train.debug.log` | DEBUG | all loggers | Full audit trail incl. raw LLM payloads |
 
-The console filter suppresses noise from `openai`, `httpx`, and `httpcore` — those appear in the file log only. Call `setup_logging()` once at the entry point before constructing any `Environment`.
+The console/`train.log` filters suppress noise from `openai`, `httpx`, and `httpcore` — those appear in the debug log only. Call `setup_logging()` once at the entry point before constructing any `Environment`.
+
+### Transcript stream
+
+`train.transcript.log` exists to answer one question: **did the LLM's command match the RL action it was told to perform?** The RL action is only a label on a natural-language instruction; the LLM can ignore it and run something else, which would corrupt reward attribution. Each interaction step logs the sampled action next to the model's reasoning and the actual command, so mismatch can be audited by eye after a run. Emitted by `Environment._log_transcript`; the model's thinking trace is captured in `LLMClient.complete` (`reasoning_content`/`reasoning`, empty for non-reasoning models — their rationale lands in `content` instead). Episode boundaries are marked by `scripts/train.py`, which owns the episode counter.
 
 ## Random Episode Runner
 

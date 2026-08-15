@@ -26,6 +26,9 @@ from rl.reward import RewardCalculator
 from rl.state import EpisodeState
 
 logger = logging.getLogger(__name__)
+transcript_logger = logging.getLogger("rl.transcript")  # human-readable per-step audit stream
+
+_TRANSCRIPT_OUTPUT_CHARS = 600  # snippet length in the transcript; full output is in messages/debug log
 
 _INITIAL_TASK = (
     "You are operating on a private internal network. "
@@ -47,6 +50,22 @@ _PROGRESS_FEATURE: dict[Action, str] = {
 # rather than hardcoding its own number, so the two can't silently drift apart.
 DEFAULT_CONTEXT_WINDOW = 3
 
+# Actions that can legitimately earn the terminal exploit reward, mapped to the
+# vulnerability each is "for" — used to withhold credit when an exploit fires
+# under a different action than the one that's supposed to cash it in (e.g. the
+# LLM already had credentials from an earlier turn and connects directly while
+# BRUTE_FORCE_SSH was the sampled action). BRUTE_FORCE_*/SCAN_PORTS/PROBE_PORT/
+# PROBE_HTTP deliberately excluded: hydra alone only sets creds_found (rl/parser.py's
+# _parse_hydra never fires an ExploitEvent), and CONNECT_* is what's supposed to use
+# the credential — crediting BRUTE_FORCE_* directly would blur that intended two-step chain.
+_ACTION_VULNERABILITY: dict[Action, str] = {
+    Action.CONNECT_SSH: "ssh_weak_credentials",
+    Action.CONNECT_FTP: "ftp_anonymous_login",
+    Action.CONNECT_TELNET: "telnet_weak_credentials",
+    Action.PROBE_REDIS: "redis_no_auth",
+    Action.PROBE_MONGO: "mongodb_no_auth",
+}
+
 
 @dataclass
 class EnvironmentConfig:
@@ -59,6 +78,8 @@ class EnvironmentConfig:
     context_window: int = DEFAULT_CONTEXT_WINDOW
     api_timeout: int = 60
     reasoning_effort: str | None = None  # e.g. "none" to disable thinking on Qwen models
+    base_url: str = "https://api.deepinfra.com/v1/openai"
+    api_key_env: str = "DEEPINFRA_API_KEY"
 
 
 class Environment:
@@ -76,7 +97,13 @@ class Environment:
         self.config = config
         self._state = EpisodeState()
         self._reward_calc = RewardCalculator()
-        self._client = LLMClient(model=config.model, api_timeout=config.api_timeout, reasoning_effort=config.reasoning_effort)
+        self._client = LLMClient(
+            model=config.model,
+            api_timeout=config.api_timeout,
+            reasoning_effort=config.reasoning_effort,
+            base_url=config.base_url,
+            api_key_env=config.api_key_env,
+        )
         self._executor = Executor(
             config.container_name,
             dry_run=config.dry_run,
@@ -104,6 +131,30 @@ class Environment:
         self._step_count = 0
         logger.info("=== Episode reset ===")
         return self._state.to_tensor()
+
+    def _log_transcript(
+        self, action: Action, ip: str | None, reward: float, *,
+        reasoning: str = "", content: str = "", command: str = "",
+        output: str = "", exploit: Any = None, skip: str | None = None,
+    ) -> None:
+        """Emit one human-readable block to the transcript stream, pairing the RL
+        action with what the LLM actually reasoned and ran — the artifact for
+        auditing action/command mismatch."""
+        if skip:
+            transcript_logger.info(
+                "── Step %d  action=%s  host=%s  reward=%+.1f  SKIP=%s",
+                self._step_count, action.name, ip or "-", reward, skip,
+            )
+            return
+        thinking = reasoning or content or "(none)"
+        snippet = output if len(output) <= _TRANSCRIPT_OUTPUT_CHARS else output[:_TRANSCRIPT_OUTPUT_CHARS] + " …[truncated]"
+        exploit_str = f"  exploit={exploit.vulnerability}" if exploit else ""
+        transcript_logger.info(
+            "── Step %d  action=%s  host=%s  reward=%+.1f%s\n"
+            "   thinking: %s\n   command: %s\n   output: %s",
+            self._step_count, action.name, ip or "-", reward, exploit_str,
+            thinking, command, snippet,
+        )
 
     @staticmethod
     def _host_label(action: Action, ip: str | None) -> str:
@@ -226,6 +277,7 @@ class Environment:
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward, skip,
             )
+            self._log_transcript(action, ip, reward, skip=skip)
             return reward, {"step": self._step_count, "skip": skip}
         except Exception as exc:
             self._messages.pop()
@@ -237,6 +289,7 @@ class Environment:
                 self._step_count, self.config.max_steps,
                 action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             )
+            self._log_transcript(action, ip, reward, skip="unexpected_error")
             return reward, {"step": self._step_count, "skip": "unexpected_error"}
 
         self._messages.append(request.assistant_message)
@@ -271,7 +324,15 @@ class Environment:
         # sampled would reinforce the wrong pair for a result it didn't cause — so an
         # exploit only counts here if it landed on the host this step targeted.
         wrong_host = parsed.exploit is not None and parsed.exploit.host != ip
-        exploit = None if (parsed.exploit is None or already_exploited or wrong_host) else parsed.exploit
+
+        # Reward only if the exploit that fired is the one this action is actually
+        # "for" (_ACTION_VULNERABILITY above) — e.g. a real ssh_weak_credentials
+        # exploit under BRUTE_FORCE_SSH still doesn't get credited, since that's
+        # CONNECT_SSH's job. Independent of wrong_host: this only applies once an
+        # exploit has already passed the host check.
+        landed = parsed.exploit is not None and not wrong_host and not already_exploited
+        wrong_action = landed and _ACTION_VULNERABILITY.get(action) != parsed.exploit.vulnerability
+        exploit = parsed.exploit if landed and not wrong_action else None
         reward = self._reward_calc.step(exploit)
         self._step_count += 1
 
@@ -290,11 +351,21 @@ class Environment:
                 "  └─ exploit on %s ignored — step targeted %s (action=%s)",
                 parsed.exploit.host, ip, action.name,
             )
+        if wrong_action:
+            logger.info(
+                "  └─ %s exploit ignored for reward — action=%s doesn't earn it",
+                parsed.exploit.vulnerability, action.name,
+            )
         logger.info(
             "[Step %2d/%d] %-20s → %-16s  hosts=%d  reward=%+.1f%s",
             self._step_count, self.config.max_steps,
             action.name, self._host_label(action, ip), len(self._state.known_hosts()), reward,
             f"  exploit={exploit.vulnerability}" if exploit else "",
+        )
+        self._log_transcript(
+            action, ip, reward,
+            reasoning=request.reasoning, content=request.assistant_message["content"],
+            command=request.command, output=result.output, exploit=exploit,
         )
         return reward, info
 
@@ -338,10 +409,7 @@ def _action_to_instruction(action: Action, ip: str | None) -> str:
         case Action.BRUTE_FORCE_TELNET:
             return f"Attempt to brute-force Telnet credentials on {ip}."
         case Action.CONNECT_SSH:
-            return (
-                f"Attempt to log in via SSH to {ip} using any credentials you have "
-                "discovered. Run 'id' to confirm shell access."
-            )
+            return f"Attempt to log in via SSH to {ip}. Run 'id' to confirm shell access."
         case Action.CONNECT_FTP:
             return f"Connect to the FTP service on {ip} and list directory contents."
         case Action.CONNECT_TELNET:

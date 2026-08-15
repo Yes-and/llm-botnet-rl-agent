@@ -20,6 +20,14 @@ where `G_t = Σ_{k=t}^{T} γ^{k-t} · r_k` is the discounted return from step t.
 
 **Baseline:** if `use_baseline: true`, the mean return across the episode is subtracted from each `G_t` before the update. This reduces variance without introducing a learned critic.
 
+**Visitation-count exploration bonus (optional, `visitation_bonus_coeff`, default `0.0` — off):** an intrinsic per-step reward `1/sqrt(count)`, where `count` is a persistent, whole-run (never per-episode) count of how many times the policy has selected that action, including the current occurrence. Motivated by a `full_action_space` run's entropy collapse onto 3 of 12 actions — vanilla REINFORCE with no baseline reinforces whatever earns positive return early, and the flat `entropy_coeff` bonus (uniform pressure on the whole distribution) didn't stop it; a count-based bonus targets specifically under-tried actions instead. Computed as a second, parallel per-episode reward stream (`intrinsic_rewards`, same shape as the real `rewards` list) run through the same `_compute_returns(gamma)`, then folded into the loss with its own coefficient — deliberately kept separate from the real `reward` fed into `rewards.csv`'s `total_reward`, so that column keeps meaning "real reward only":
+
+```
+loss = -Σ_t (G_t + visitation_bonus_coeff · G_t^intrinsic) · log π(a_t, h_t | s_t)  −  entropy_coeff · entropy_bonus
+```
+
+`use_baseline` mean-centering is applied only to the real returns, not the intrinsic stream. The visitation counter is process-lifetime only — not saved into or restored from checkpoints, so a `--resume`'d run restarts it from zero (same category of known gap as the `learning_rate` resume issue below).
+
 ## Episode Loop
 
 At each step:
@@ -49,12 +57,13 @@ One YAML file per run under `experiments/configs/`. Training-specific fields:
 | `entropy_coeff` | 0.0 | Entropy bonus weight; `loss -= entropy_coeff * entropy`. |
 | `conditioned_action_head` | false | ADR 010 — condition the action head on the selected host's features. |
 | `duration_options` | `(1, 2, 3, 5)` | ADR 011 — discrete try-budgets the duration head can choose from. Must satisfy `context_window >= max(duration_options)` (checked at startup). |
+| `visitation_bonus_coeff` | 0.0 | Weight on the count-based exploration bonus described above. `0.0` (default) is a full no-op — no behavior change, no extra computation cost beyond bookkeeping. |
 
 All environment fields from `EnvironmentConfig` are also required (`container_name`, `max_steps`, `model`, etc.) — see `docs/features/rl-environment.md`.
 
 ## Checkpoints
 
-Saved to `experiments/results/<config-stem>/checkpoint_ep<N>.pt`. Each checkpoint contains:
+Saved to `experiments/results/<scenario>/<config-stem>/checkpoint_ep<N>.pt` — nested under the scenario number (e.g. `s003`) parsed from the config filename, same spirit as the case-study track's `<scenario>-<exploit>/` folders (`docs/features/scenario-*.md`), just scenario-only since an RL config targets a whole multi-target scenario, not one exploit type. A config that doesn't start with `s<digits>-` falls back to using its own stem as the scenario folder too (a harmless no-op nesting, not an error). Each checkpoint contains:
 - `policy_state_dict` — network weights
 - `optimizer_state_dict` — Adam state
 - `episode` — episode number at save time
@@ -64,8 +73,8 @@ Saved to `experiments/results/<config-stem>/checkpoint_ep<N>.pt`. Each checkpoin
 
 ## Structured Output
 
-- `rewards.csv` — one row per episode: `total_reward`, `loss`, `exploit_count`, `entropy`, plus `act_<action>` and `tries_<action>` counts.
-- `steps.csv` — one row per RL decision (block, not primitive command): `episode`, `step`, `action`, `reward`, `tries_used`. `step` is the block's *final* primitive step count, not its first.
+- `rewards.csv` — one row per episode: `total_reward`, `loss`, `exploit_count`, `entropy`, `visitation_bonus_sum` (raw, undiscounted per-episode sum of the exploration bonus — populated regardless of whether `visitation_bonus_coeff` is on, so it can be inspected without having enabled it), plus `act_<action>` and `tries_<action>` counts.
+- `steps.csv` — one row per RL decision (block, not primitive command): `episode`, `step`, `action`, `reward`, `tries_used`, `visitation_count` (running whole-run count for that action, post-increment), `visitation_bonus` (`1/sqrt(visitation_count)` for that step). `step` is the block's *final* primitive step count, not its first.
 
 ## Analysis Tooling
 
@@ -80,7 +89,7 @@ Since one `steps.csv` row covers a whole multi-try block (ADR 011) but is logged
 
 ```bash
 python scripts/train.py experiments/configs/s002-train-001.yml
-# Log defaults to experiments/results/<run_id>/train.log
+# Log defaults to experiments/results/<scenario>/<run_id>/train.log
 
 python scripts/train.py experiments/configs/s002-train-001.yml --log-file custom.log
 ```

@@ -21,12 +21,12 @@ obs, reward, done, info = env.step(action, host_idx)
 ## Step Flow
 
 1. **Resolve host** — map `host_idx` into `state.known_hosts()` (IP-sorted). Broadcast actions (`DO_NOTHING`, `SCAN_NETWORK`) ignore `host_idx`.
-2. **Translate** — `_action_to_instruction(action, ip)` produces a one-sentence natural-language task for the LLM.
+2. **Translate** — `_action_to_instruction(action, ip)` produces a one-sentence natural-language task for the LLM. Instructions are deliberately protocol-scoped, not "use any credentials you have" — `CONNECT_SSH` used to say exactly that, which measurably steered the LLM into reusing FTP-cracked credentials over SSH on a host with no SSH service, wasting a real crack (fixed 2026-07-19). This is distinct from the standing decision not to hint at the wordlist path (`llm-command-generation.md`) — that would add information the LLM doesn't have; this only removed wording that actively contradicted state the environment already tracks (`service_ssh`/`service_ftp`/`service_telnet`).
 3. **LLM call** — append the instruction as a user message; call `LLMClient.complete()` to get a shell command.
 4. **Execute** — run the command via `Executor` inside the attacker container.
 5. **Parse** — `parse_step(command, output, exit_code)` returns state feature updates and an optional `ExploitEvent`.
 6. **Update state** — apply all feature updates to `EpisodeState`; mark `(ip, action)` as tried.
-7. **Deduplicate and attribute** — `ExploitEvent` is only forwarded to `RewardCalculator` if (a) this is the first detection of `shell_access` on that host, **and** (b) `exploit.host` matches the host `host_idx` actually resolved to for this step. `exploit.host` comes from a regex over the LLM's own command string, not from `host_idx` — nothing about executing the command constrains which host it targets. Without check (b), an exploit against a host the policy didn't select would still be credited to the `(host_slot, action)` it did select, reinforcing the wrong pair for a result it didn't cause. State updates from the command always apply regardless of (b) — the exploit genuinely happened in the simulated world, it's only the RL credit that's withheld.
+7. **Deduplicate and attribute** — `ExploitEvent` is only forwarded to `RewardCalculator` if (a) this is the first detection of `shell_access` on that host, (b) `exploit.host` matches the host `host_idx` actually resolved to for this step, **and** (c) the exploit's vulnerability matches what the *sampled action* is actually for (`_ACTION_VULNERABILITY`: `CONNECT_SSH`→`ssh_weak_credentials`, `CONNECT_FTP`→`ftp_anonymous_login`, `CONNECT_TELNET`→`telnet_weak_credentials`, `PROBE_REDIS`→`redis_no_auth`, `PROBE_MONGO`→`mongodb_no_auth`; every other action, including all `BRUTE_FORCE_*`, maps to nothing and never earns credit directly). `exploit.host` comes from a regex over the LLM's own command string, and the LLM is free to run any command regardless of what it was asked — nothing constrains either which host it names or which tool it uses. Without (b), an exploit on the wrong host gets credited to a `(host_slot, action)` that didn't cause it; without (c), an exploit via the wrong *tool* does the same (found in practice: policy sampled `BRUTE_FORCE_SSH`, LLM already had credentials from an earlier turn and just connected directly via `sshpass` — a real `ssh_weak_credentials` exploit, but that's `CONNECT_SSH`'s job, not `BRUTE_FORCE_SSH`'s). State updates from the command always apply regardless of (b)/(c) — the exploit genuinely happened in the simulated world, it's only the RL credit that's withheld.
 8. **Reward** — `RewardCalculator.step(exploit)` applies `+10` (exploit) and `-0.1` (step penalty).
 9. **Return** — `(obs_tensor, reward, done, info)`.
 
@@ -56,7 +56,11 @@ class EnvironmentConfig:
     context_window: int = DEFAULT_CONTEXT_WINDOW  # = 3; number of recent step exchanges retained in LLM history
     api_timeout: int = 60     # seconds before an LLM API call is aborted and retried
     reasoning_effort: str | None = None  # DeepInfra reasoning_effort field; set to "none" to disable thinking on Qwen models
+    base_url: str = "https://api.deepinfra.com/v1/openai"
+    api_key_env: str = "DEEPINFRA_API_KEY"
 ```
+
+`base_url`/`api_key_env` select the OpenAI-compatible provider (DeepInfra by default; set both to route through OpenRouter or another provider instead — see `.env.example` for the expected key name). Config-only, per `CLAUDE.md`'s tech-stack convention — never hardcode a provider. `scripts/train.py`'s preflight check reads `api_key_env` from the config too, so it validates the right env var is set regardless of provider.
 
 ## LLM Message History
 
@@ -87,6 +91,7 @@ Two log files are written per run:
 | LLM produces no tool call | Step penalty applied, step skipped (`info["skip"] = "no_tool_call"`); the dangling instruction is popped from message history to keep history well-formed |
 | Same exploit detected twice | Reward only on first detection; `shell_access` already True blocks re-reward |
 | Exploit lands on a host other than the one `host_idx` resolved to | No reward — logged as `exploit on <host> ignored — step targeted <host_idx's host>`; state still updates for the host actually exploited |
+| Exploit fires via a tool/technique that doesn't match the sampled action (e.g. `BRUTE_FORCE_SSH` sampled, LLM connects directly with known creds instead) | No reward — logged as `<vulnerability> exploit ignored for reward — action=<action> doesn't earn it`; state still updates (the host genuinely got compromised, just not by the sampled action) |
 | Unexpected exception in `step()` | Full traceback logged via `logger.exception`; step skipped with `info["skip"] = "unexpected_error"`. Training continues rather than crashing. |
 | Skip on a later try within a multi-try block | Block is still trained on (reward from earlier real tries retained); returned `info` has no `"skip"` key — `info["step"]`/`info["tries_used"]` reflect the block's real outcome |
 

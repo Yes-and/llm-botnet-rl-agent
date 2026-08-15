@@ -1,0 +1,15 @@
+# Random-policy smoke test — ADR 014 Phase 1 (single-host engagement).
+# No policy network, no gradient. Checks the mechanics only: does reset()'s
+# scripted scan populate the pool, does start_engagement()/interact() cycle
+# through hosts correctly, does an engagement actually terminate (exploit,
+# ABANDON, or safety cap) rather than hanging. Run this before the train.py
+# smoke config below — cheaper and faster to diagnose wiring issues here.
+# Commit this file before running. Results are gitignored.
+
+container_name: s003_attacker
+max_steps: 20
+max_engagement_steps: 5
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+max_output_chars: 4000
+seed: 42

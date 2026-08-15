@@ -49,6 +49,93 @@ def test_run_episode_runs_for_max_steps():
     assert len(result.steps) == 5
 
 
+def test_malformed_tool_call_error_does_not_end_episode():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=2)
+    malformed_request = CommandRequest(
+        command="", tool_call_id="call_0", assistant_message={"role": "assistant", "tool_calls": [{"id": "call_0"}]},
+        error="Malformed tool call: expected a JSON object",
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [malformed_request, make_request(1)]
+        MockExecutor.return_value.execute.side_effect = [make_result(1)]
+        result = run_episode(config)
+    assert len(result.steps) == 2
+    assert result.stop_reason is None
+    assert result.steps[0].result.exit_code == -1
+    MockExecutor.return_value.execute.assert_called_once()  # never called for the malformed step
+
+
+def test_malformed_tool_call_does_not_echo_raw_content_to_model():
+    # Guards against feeding potentially garbled/leaked-token content from a
+    # malformed tool call back into the model's own conversation history.
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=1)
+    raw_garbled = "<|tool_calls_section_begin|> some leaked token garbage functions.execute_command:7"
+    malformed_request = CommandRequest(
+        command="", tool_call_id="call_0", assistant_message={"role": "assistant", "tool_calls": [{"id": "call_0"}]},
+        error=raw_garbled,
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.return_value = malformed_request
+        result = run_episode(config)
+    tool_message = result.steps[0]
+    assert raw_garbled not in tool_message.result.output
+    # the raw detail must still be reachable via the request, for our own logging
+    assert tool_message.request.error == raw_garbled
+
+
+def test_value_error_sets_stop_reason_and_ends_episode():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=5)
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [
+            make_request(0),
+            ValueError("Model returned no tool call. Text response: 'here is my plan'"),
+        ]
+        MockExecutor.return_value.execute.side_effect = [make_result(0)]
+        result = run_episode(config)
+    assert len(result.steps) == 1
+    assert result.stop_reason == "Model returned no tool call. Text response: 'here is my plan'"
+
+
+def test_declare_futile_ends_episode_without_executing():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=5, declare_futile=True)
+    futile_request = CommandRequest(
+        command="credentials exhausted", tool_call_id="call_0",
+        assistant_message={"role": "assistant", "tool_calls": [{"id": "call_0"}]},
+        tool_name="declare_futile",
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [make_request(0), futile_request]
+        MockExecutor.return_value.execute.side_effect = [make_result(0)]
+        result = run_episode(config)
+    assert len(result.steps) == 2
+    assert result.stop_reason == "declared futile: credentials exhausted"
+    MockExecutor.return_value.execute.assert_called_once()  # never called for the declare_futile step
+
+
+def test_stop_reason_is_none_on_normal_completion():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=2)
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [make_request(i) for i in range(2)]
+        MockExecutor.return_value.execute.side_effect = [make_result(i) for i in range(2)]
+        result = run_episode(config)
+    assert result.stop_reason is None
+
+
+def test_on_step_truthy_return_stops_episode_early():
+    config = EpisodeConfig(task="test task", container_name="c", max_steps=5)
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.side_effect = [make_request(i) for i in range(5)]
+        MockExecutor.return_value.execute.side_effect = [make_result(i) for i in range(5)]
+        result = run_episode(config, on_step=lambda record: record.step == 1)
+    assert len(result.steps) == 2
+
+
 def test_step_records_have_correct_indices():
     config = EpisodeConfig(task="test task", container_name="c", max_steps=3)
     with patch("agent.loop.LLMClient") as MockClient, \
@@ -169,7 +256,23 @@ def test_llm_client_receives_model_from_config():
         MockClient.return_value.complete.return_value = make_request(0)
         MockExecutor.return_value.execute.return_value = make_result(0)
         run_episode(config)
-    MockClient.assert_called_once_with(model="some-model")
+    _, kwargs = MockClient.call_args
+    assert kwargs["model"] == "some-model"
+
+
+def test_llm_client_receives_base_url_and_api_key_env_from_config():
+    config = EpisodeConfig(
+        task="t", container_name="c", max_steps=1,
+        base_url="https://openrouter.ai/api/v1", api_key_env="OPENROUTER_API_KEY",
+    )
+    with patch("agent.loop.LLMClient") as MockClient, \
+         patch("agent.loop.Executor") as MockExecutor:
+        MockClient.return_value.complete.return_value = make_request(0)
+        MockExecutor.return_value.execute.return_value = make_result(0)
+        run_episode(config)
+    _, kwargs = MockClient.call_args
+    assert kwargs["base_url"] == "https://openrouter.ai/api/v1"
+    assert kwargs["api_key_env"] == "OPENROUTER_API_KEY"
 
 
 def test_executor_receives_container_and_dry_run_from_config():

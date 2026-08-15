@@ -62,6 +62,12 @@ Every step's full command + exit code + output is also now logged to `<config-na
 
 **Also added: a shared hydra-success check across all three markers** (`_HYDRA_SUCCESS`, host-agnostic version of `rl/parser.py`'s `_HYDRA_CRED` — that one requires an IP, these task configs use a hostname). `hydra` always exits `0` whether or not it finds a valid credential, so exit code alone never distinguished a real find from `0 valid password found`; this affected SSH and FTP too, not just telnet — a run relying purely on `hydra` with no follow-up `sshpass`/`ftplib` call would have scored `0` under the old markers even on a genuine find.
 
+## Opt-in `declare_futile` tool (2026-08-04)
+
+`EpisodeConfig.declare_futile` (default `False`) gives the LLM a second tool, `declare_futile` (`agent/tools.py`'s `DECLARE_FUTILE_TOOL`), to end its own episode early when it judges the target unproductive. Off by default so every existing config's tool list, system prompt, and token cost stay byte-for-byte identical unless a config opts in with `declare_futile: true` — see [ADR 018](../adr/018-declare-futile-tool.md) for why this is gated rather than always-on.
+
+When enabled: `LLMClient` sends both tools to the API and appends one hint sentence to `SYSTEM_PROMPT` (`agent/tools.py`'s `_DECLARE_FUTILE_HINT`); `LLMClient.complete()` dispatches on `tool_call.function.name` — a `declare_futile` call returns a `CommandRequest` with `tool_name="declare_futile"` and the model's stated reason in `command` (reusing that field rather than adding a new one, since it's unused for this tool otherwise). `run_episode()` branches on `tool_name`: instead of executing anything, it sets `EpisodeResult.stop_reason = f"declared futile: {reason}"`, appends a synthetic tool-result message, and breaks — same `stop_reason` field already used for a no-tool-call `ValueError`, so `scripts/run_case_study.py`'s existing `Ended early: {reason}` print and the batch runner's CSV column need no changes to surface it.
+
 ## Testing
 
 `tests/test_loop.py` covers the loop logic offline — both `LLMClient` and `Executor` are mocked. Tests verify: correct step count, step record structure, message history growth (2 messages per step), tool call ID threading, initial message format, and config passthrough to constructors.

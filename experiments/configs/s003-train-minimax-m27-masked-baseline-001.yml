@@ -1,0 +1,63 @@
+# REINFORCE training run — scenario-003, masked-baseline experiment.
+# Counterpart to s003-train-minimax-m27-full-action-space-001: same seeds,
+# architecture, and hyperparameters, but full_action_space: false — is_valid()'s
+# structural preconditions on exploit-path actions (BRUTE_FORCE_*/CONNECT_*/
+# PROBE_HTTP/PROBE_REDIS/PROBE_MONGO) are back in effect, forcing the
+# scan-before-probe / brute-force-before-connect ordering instead of leaving
+# it to the LLM's own judgment. ABANDON's MIN_STEPS_BEFORE_ABANDON gate is
+# unaffected either way. See docs/adr/014-hierarchical-single-host-
+# engagement.md's Phase 1 notes and docs/features/rl-policy.md's "Action
+# Masking" section.
+#
+# Run on top of agent/tools.py's 2026-07-17 wordlist-path fix (SYSTEM_PROMPT
+# now states /usr/share/wordlists/passwords.txt directly, instead of the model
+# guessing/discovering it). This is the first real test of whether that fix,
+# combined with structural forcing, produces working multi-step brute-force
+# chains — versus the full_action_space run, which collapsed entropy onto
+# PROBE_REDIS/PROBE_MONGO only (see rewards.csv / train.transcript.log there).
+#
+# Every other parameter, including max_engagement_steps=20, is left identical
+# to the full_action_space run. That value's original justification ("more
+# room now that nothing structurally shortens unproductive exploration")
+# doesn't carry over — but the number itself still holds, for a different
+# reason: it's a ceiling, not a target (an engagement ends on success/ABANDON
+# regardless), and a forced scan-then-brute-force-then-connect chain needs
+# real headroom to reach its payoff step, especially with a hydra retry after
+# a timeout or wrong guess (see docs/features/scenario-001-ssh-bruteforce.md's
+# case study for a real chain running 6-7 commands deep). Cutting this back
+# risks truncating a legitimate chain before it can pay off, confounding
+# whether masking+the wordlist fix worked at all. So: unchanged, on purpose,
+# for a corrected reason — not left over by default.
+#
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+max_engagement_steps: 20
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+full_action_space: false
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 2
+
+# --- Training ---
+num_episodes: 25
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[mGKH]")
 
 ALLOWED_BINARIES = frozenset({
-    "nmap", "hydra", "netcat", "nc", "curl", "ssh", "sshpass", "python3",
+    "nmap", "hydra", "netcat", "nc", "curl", "ssh", "sshpass", "ssh-keygen", "python3",
     "ping", "ip", "ls", "cat", "find", "grep", "echo", "which",
     "telnet", "ftp", "redis-cli",
 })
@@ -18,7 +18,22 @@ _DANGEROUS_PATTERNS = [
     (re.compile(r"\bdd\b"), "raw disk I/O"),
     (re.compile(r"\bmkfs\b"), "formats a filesystem"),
     (re.compile(r":\(\)\s*\{"), "fork bomb"),  # matches :(){ ... } shell function definition
-    (re.compile(r">\s*/dev/"), "redirects output to /dev/ — remove the redirect and retry; output must stay visible"),
+    # (?<!2) exempts `2>/dev/null` (stderr suppression, benign — the model uses this
+    # correctly for its own filesystem self-discovery, e.g. `find ... 2>/dev/null`)
+    # while still blocking `>/dev/null`/`1>/dev/null`/`&>/dev/null` (stdout hiding).
+    # Doesn't handle a stray space between the fd digit and `>` (e.g. `2 > /dev/null`)
+    # — not seen in practice, not worth a variable-width lookbehind for.
+    (re.compile(r"(?<!2)>\s*/dev/"), "redirects stdout to /dev/ — remove the redirect and retry; output must stay visible"),
+    # python3 is allowed (required for pymongo/telnetlib — no other client exists for
+    # those protocols in this image), but shelling out from inside it reaches any
+    # binary in the container regardless of ALLOWED_BINARIES, defeating the curated
+    # tool list entirely (confirmed 2026-07-31: os.system('ssh-keygen ...') worked
+    # despite ssh-keygen not being allowed at the time). rm/dd/mkfs/fork-bomb text
+    # still gets caught above regardless of python wrapping (plain regex over the
+    # whole command string) — this closes the remaining "run anything" escape hatch.
+    (re.compile(r"os\.system\(|subprocess\.\w+\(|os\.popen\("),
+     "shells out to an arbitrary binary from Python, bypassing the tool allowlist — "
+     "use an allowed binary directly, or a library (pymongo/telnetlib/ftplib) for network protocols"),
 ]
 
 

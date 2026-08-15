@@ -46,7 +46,7 @@ Outputs a distribution over all 13 action types (see `rl/actions.py`). Structura
 
 One dynamic hard mask is applied at inference time: if a host's `creds_found` feature is `1`, all `BRUTE_FORCE_*` actions (`BRUTE_FORCE_SSH`, `BRUTE_FORCE_FTP`, `BRUTE_FORCE_TELNET`) are masked to `-inf` for that host slot. This prevents wasteful re-brute-forcing once credentials are already known but before shell access is confirmed (an interim state the host head's `shell_access` mask above doesn't cover, since that mask only fires once `shell_access` itself is `1`). Note: `creds_found` is one shared flag per host, not per-service, so this is only correct because no current scenario target exposes more than one crackable service per host. A future multi-service target would need per-service credential features before this mask stays correct.
 
-All other precondition checks (port open, etc.) are left to the learned reward signal rather than hard-masking, to avoid over-constraining the agent's exploration.
+All other precondition checks (port open, etc.) are left to the learned reward signal rather than hard-masking, to avoid over-constraining the agent's exploration. `CONNECT_FTP` is the one exception to the general "connect needs discovered creds" pattern in `is_valid()` — it unmasks on `service_ftp` alone, since FTP's soft target in this scenario is anonymous login, which has no credential for `creds_found` to ever be set from.
 
 ### Parallel mode (`conditioned_action_head: false`)
 

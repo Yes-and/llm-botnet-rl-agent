@@ -31,7 +31,7 @@ llm-botnet-rl-agent/
 | Layer | Choice | Notes |
 |---|---|---|
 | Python | 3.11 (via pyenv) | |
-| LLM API | DeepInfra (OpenAI-compatible) | Use the `openai` SDK with a custom `base_url` |
+| LLM API | DeepInfra by default; other OpenAI-compatible providers (e.g. OpenRouter) per-config | Use the `openai` SDK; `base_url`/`api_key_env` are config fields, not hardcoded |
 | RL | Custom (PyTorch) | |
 | Sandbox environment | Docker + Docker Compose | |
 | Experiment config | YAML | |
@@ -62,6 +62,8 @@ When adding a new binary to the attacker container, update all five of these:
 
 - Every run must be fully reproducible: commit the config before running, set all seeds in the config (not in code), and record the model ID and environment state.
 - Results are gitignored; configs are not. If a run isn't configured, it didn't happen.
+- Case-study results (`experiments/results/`) are nested per scenario: `<scenario>-<exploit>/` (e.g. `s004-telnet/`), holding `<model>[-N].log` for single runs and `<date>-<purpose>/` for batch-runner output — tag the citable one `-final`. `scripts/run_case_study.py`/`scripts/run_case_study_batch.py` derive the scenario folder automatically from the config filename (`s00X-case-<exploit>-<model>.yml`) and auto-number on collision instead of overwriting; only pass `--log-file`/`--out-dir` to add a purpose label (`-confirm-glm52`, `-rerun3-final`).
+- RL-training results are nested per scenario number only (e.g. `s003/`, not `s003-<exploit>/` — a training run targets a whole multi-target scenario, not one exploit type), each run getting its own `<config-stem>/` subfolder (`rewards.csv`, `steps.csv`, checkpoints, logs). `scripts/train.py` derives this from the config filename automatically; no naming convention is enforced on the stem itself beyond starting with `s<digits>-`.
 
 ## Key Design Decisions
 

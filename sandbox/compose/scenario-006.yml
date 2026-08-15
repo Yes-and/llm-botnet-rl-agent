@@ -1,0 +1,37 @@
+name: scenario-006
+
+services:
+  attacker:
+    build: ../images/attacker
+    container_name: s006_attacker
+    networks:
+      - s006_net
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_RAW
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp                # always empty on container start — prevents state leaking between episodes
+      - /home/agent         # clears working directory state between runs
+    stdin_open: true
+    tty: true
+
+  target:
+    build: ../images/redis-target-teamtnt  # redis:6.2 (last version before Redis 7.0's
+                              # "protected configs" hardening) + root-owned redis-server +
+                              # sshd — see that Dockerfile's comment for why both were needed
+    container_name: s006_target
+    hostname: target
+    restart: unless-stopped
+    networks:
+      - s006_net
+
+networks:
+  s006_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24

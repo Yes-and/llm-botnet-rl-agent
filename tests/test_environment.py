@@ -75,7 +75,7 @@ def test_reset_clears_state_from_previous_episode(env_mocks):
 def test_broadcast_step_discovers_host(env_mocks):
     env, mock_llm, mock_exec = env_mocks
     mock_llm.complete.return_value = _req("nmap -sn 172.18.0.0/24 -oG -")
-    mock_exec.execute.return_value = _res("Host: 172.18.0.5 ()\tStatus: Up\n")
+    mock_exec.execute.return_value = _res("Host: 172.18.0.5 (target_host)\tStatus: Up\n")
 
     obs, reward, _, info = env.step(Action.SCAN_NETWORK, 0)
 
@@ -134,6 +134,29 @@ def test_exploit_on_wrong_host_gives_no_reward(env_mocks):
     assert reward == pytest.approx(-0.1)
     assert info["exploit"] is None
     assert env._state.get("172.18.0.9", "shell_access")
+
+
+def test_exploit_wrong_action_gives_no_reward_but_state_is_real(env_mocks):
+    """Found in a real run (2026-07-16): the policy sampled BRUTE_FORCE_SSH, but the
+    LLM ran a MongoDB connection instead (already knew Mongo was the only open
+    service) and it succeeded. Real exploit, wrong action — no reward credit, but
+    the host genuinely got compromised, so state reflects it (shell_access set,
+    host stays selectable — masking it out is policy.py's job via that flag, not
+    step()'s)."""
+    env, mock_llm, mock_exec = env_mocks
+    env._state.update("172.18.0.5", {"is_alive": True, "port_27017_open": True})
+    mock_llm.complete.return_value = _req(
+        "python3 -c \"from pymongo import MongoClient; "
+        "client = MongoClient('mongodb://172.18.0.5:27017/'); print(client.list_database_names())\""
+    )
+    mock_exec.execute.return_value = _res("['admin', 'config', 'local']")
+
+    _, reward, _, info = env.step(Action.BRUTE_FORCE_SSH, 0)  # host_idx 0 -> 172.18.0.5
+
+    assert reward == pytest.approx(-0.1)
+    assert info["exploit"] is None
+    assert env._state.get("172.18.0.5", "shell_access")
+    assert "172.18.0.5" in env._state.known_hosts()
 
 
 # ── step(): deduplication ─────────────────────────────────────────────────────

@@ -57,6 +57,32 @@ def test_empty_command_rejected():
     assert result.exit_code == -1
 
 
+@pytest.mark.parametrize("command", [
+    "nmap -sV target | rm -rf /",
+    "nmap -sV target; rm -rf /",
+    "nmap -sV target && rm -rf /",
+    "nmap -sV target || rm -rf /",
+])
+def test_dangerous_pattern_caught_regardless_of_separator(command):
+    """The dangerous-pattern blocklist is a plain regex scan over the whole raw command
+    string, so it already catches rm/dd/mkfs/etc. no matter where they sit relative to a
+    pipe/;/&&/|| — confirmed 2026-07-31 while considering (and rejecting, see below) a
+    more invasive per-segment allowlist check for this same concern."""
+    executor = Executor("test-container")
+    result = executor.execute(command)
+    assert result.exit_code == -1
+    assert "[REJECTED]" in result.output
+
+
+def test_pipe_of_two_allowed_binaries_still_works():
+    # real usage pattern from a scenario-006 run: piping a generated key file into
+    # redis-cli's -x (read value from stdin) — must keep working.
+    executor = Executor("test-container")
+    with patch("agent.executor.subprocess.run", return_value=make_proc("OK")):
+        result = executor.execute("cat /tmp/key.pub | redis-cli -h target -x set ssh_key")
+    assert result.exit_code == 0
+
+
 # ---------------------------------------------------------------------------
 # Blocklist
 # ---------------------------------------------------------------------------
@@ -108,9 +134,43 @@ def test_dev_write_rejected(command):
 
 def test_dev_write_rejection_message_is_actionable():
     executor = Executor("test-container")
-    result = executor.execute("find /tmp -name '*.txt' 2>/dev/null")
+    result = executor.execute("nmap -oX - target > /dev/sda")
     assert result.exit_code == -1
     assert "remove the redirect" in result.output
+
+
+@pytest.mark.parametrize("command", [
+    "python3 -c \"import os; os.system('ssh-keygen -t rsa -f /tmp/k -N \\\"\\\"')\"",
+    "python3 -c \"import subprocess; subprocess.run(['ssh-keygen', '-t', 'rsa'])\"",
+    "python3 -c \"import os; os.popen('echo hi').read()\"",
+])
+def test_python_shell_out_rejected_even_for_an_otherwise_harmless_command(command):
+    """os.system/subprocess/os.popen reach any binary in the container regardless of
+    ALLOWED_BINARIES, defeating the curated tool list — real incident 2026-07-31:
+    os.system('ssh-keygen ...') worked despite ssh-keygen not being allowlisted yet.
+    Must be rejected even when the wrapped command itself is harmless (no rm/dd here) —
+    that's the whole point, this isn't the destructive-pattern blocklist."""
+    executor = Executor("test-container")
+    result = executor.execute(command)
+    assert result.exit_code == -1
+    assert "[REJECTED]" in result.output
+
+
+@pytest.mark.parametrize("command", [
+    "find /usr/share/wordlists -name '*.txt' 2>/dev/null",
+    "ls /usr/share/wordlists/ 2>/dev/null",
+])
+def test_stderr_suppression_to_dev_null_allowed(command):
+    """2>/dev/null is ordinary stderr suppression, not output-hiding — the model
+    uses it correctly for its own filesystem self-discovery (e.g. finding the
+    real wordlist path) and it must not be blocked alongside genuine `>` stdout
+    redirects. Real incident: this exact pattern got rejected in a training run,
+    silently costing the model its own correct self-discovery attempt."""
+    executor = Executor("test-container")
+    with patch("agent.executor.subprocess.run", return_value=make_proc("passwords.txt")):
+        result = executor.execute(command)
+    assert result.exit_code == 0
+    assert "passwords.txt" in result.output
 
 
 # ---------------------------------------------------------------------------

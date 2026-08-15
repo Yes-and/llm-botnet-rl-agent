@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash admin && \
-    echo 'admin:admin123' | chpasswd
+    echo 'admin:admin1234' | chpasswd
 
 RUN mkdir -p /run/sshd && \
     sed -i \

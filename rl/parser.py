@@ -37,20 +37,24 @@ _PORT_MAP: dict[int, tuple[str, str | None]] = {
 
 # ── Compiled regexes ──────────────────────────────────────────────────────────
 
-# nmap grepable: "Host: 1.2.3.4 (hostname)  Status: Up"
+# nmap grepable: "Host: 1.2.3.4 (hostname)  Status: Up" — hostname is captured (not just
+# matched) so _parse_nmap can tell a real container (Docker Compose DNS name) apart from
+# Docker network infrastructure (gateway, etc.), which never gets a reverse-DNS entry and
+# shows empty parens instead.
 _NMAP_HOST_UP = re.compile(
-    r"^Host:\s+([\d.]+)\s+\(.*?\)\s+Status:\s+Up", re.MULTILINE
+    r"^Host:\s+([\d.]+)\s+\((.*?)\)\s+Status:\s+Up", re.MULTILINE
 )
 # nmap grepable: "Host: 1.2.3.4 (hostname)  Ports: 22/open/tcp//ssh//version/ ..."
 _NMAP_PORTS_LINE = re.compile(
-    r"^Host:\s+([\d.]+)\s+\(.*?\)\s+Ports:\s+(.+)", re.MULTILINE
+    r"^Host:\s+([\d.]+)\s+\((.*?)\)\s+Ports:\s+(.+)", re.MULTILINE
 )
 # individual port entry within the Ports field: "22/open/tcp//ssh//version/"
 _NMAP_PORT_ENTRY = re.compile(r"(\d+)/open/\w+//(\w*)")
 
 # nmap human-readable (no -oG): "Nmap scan report for [hostname (]1.2.3.4[)]" + "Host is up"
+# hostname (group 1, optional) captured for the same reverse-DNS-noise filtering as above.
 _NMAP_REPORT_UP = re.compile(
-    r"^Nmap scan report for (?:\S.*?\()?([\d.]+)\)?\s*\nHost is up",
+    r"^Nmap scan report for (?:(\S.*?)\s*\()?([\d.]+)\)?\s*\nHost is up",
     re.MULTILINE,
 )
 
@@ -65,8 +69,24 @@ _REDIS_HOST = re.compile(r"redis-cli\s+.*?-h\s+([\d.]+)")
 # MongoClient('<ip>', ...) or MongoClient('mongodb://<ip>:port/')
 _MONGO_HOST = re.compile(r"MongoClient\(['\"]?(?:mongodb://)?([\d.]+)")
 
+# Calls that actually enumerate data (require auth on a hardened deployment).
+# server_info()/command('buildInfo')/hello succeed pre-auth on virtually any MongoDB
+# deployment (needed for the driver handshake), so a bare successful MongoClient(...)
+# call proves connectivity, not an auth bypass — same distinction PING vs. INFO makes
+# for redis-cli below.
+_MONGO_DATA_CALL = re.compile(r"list_database_names|list_collection_names|\.find\(|listDatabases")
+
 # FTP('<ip>', ...) — python3 ftplib
 _FTP_PYLIB_HOST = re.compile(r"FTP\(['\"]?([\d.]+)")
+
+# An actual login attempt — either an explicit .login(...) call, or the auto-login
+# constructor form FTP(host, user, passwd). Deliberately NOT just "any comma inside
+# FTP(...)" — FTP('<ip>', timeout=5) has a comma too, from a harmless kwarg, with no
+# login attempted at all. Requires a second *string literal* (the user) right after
+# the host, or an explicit user= keyword. FTP('<ip>') alone only opens a control
+# connection — vsftpd accepts that regardless of anonymous_enable, so a bare
+# connect-and-disconnect would otherwise "succeed" against the hardened host too.
+_FTP_LOGIN_CALL = re.compile(r"\.login\(|FTP\(\s*['\"][^'\"]*['\"]\s*,\s*['\"]|FTP\([^)]*\buser\s*=")
 
 # ftp binary: "ftp [flags] <ip>" — match IP on first line of command
 _FTP_BIN_HOST = re.compile(r"^\s*ftp\b[^\n]*?([\d]+\.[\d]+\.[\d]+\.[\d]+)")
@@ -107,16 +127,25 @@ def _parse_nmap(output: str) -> ParseResult:
     # Parse regardless of exit code — timed-out scans still produce partial output.
     updates: dict[str, dict[str, bool]] = {}
 
-    # Greppable format (-oG -)
+    # Greppable format (-oG -). A host with no reverse-DNS hostname (empty parens) is
+    # Docker network infrastructure (the bridge gateway, typically the subnet's .1
+    # address) rather than a real scenario container — Compose containers always
+    # resolve to their service DNS name. Skip it: it can never be exploited, and under
+    # ADR 014's single-host engagement it would otherwise get repeatedly re-engaged
+    # (nothing ever removes it from the pool) burning real steps for nothing.
     for m in _NMAP_HOST_UP.finditer(output):
-        ip = m.group(1)
+        ip, hostname = m.group(1), m.group(2)
+        if not hostname:
+            continue
         updates.setdefault(ip, {})["is_alive"] = True
 
     for m in _NMAP_PORTS_LINE.finditer(output):
-        ip = m.group(1)
+        ip, hostname, ports = m.group(1), m.group(2), m.group(3)
+        if not hostname:
+            continue
         feats = updates.setdefault(ip, {})
         feats["is_alive"] = True
-        for pm in _NMAP_PORT_ENTRY.finditer(m.group(2)):
+        for pm in _NMAP_PORT_ENTRY.finditer(ports):
             port = int(pm.group(1))
             if port in _PORT_MAP:
                 port_feat, svc_feat = _PORT_MAP[port]
@@ -126,7 +155,9 @@ def _parse_nmap(output: str) -> ParseResult:
 
     # Human-readable format (no -oG flag)
     for m in _NMAP_REPORT_UP.finditer(output):
-        ip = m.group(1)
+        hostname, ip = m.group(1), m.group(2)
+        if not hostname:
+            continue
         updates.setdefault(ip, {})["is_alive"] = True
 
     return ParseResult(state_updates=list(updates.items()))
@@ -172,6 +203,8 @@ def _parse_mongo(command: str, output: str, exit_code: int) -> ParseResult:
     ip = m.group(1)
     if "Traceback" in output or "ServerSelectionTimeoutError" in output:
         return ParseResult()
+    if not _MONGO_DATA_CALL.search(command):
+        return ParseResult()
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],
         exploit=ExploitEvent(host=ip, vulnerability="mongodb_no_auth"),
@@ -187,9 +220,12 @@ def _parse_ftp_pylib(command: str, output: str, exit_code: int) -> ParseResult:
     ip = m.group(1)
     if "Traceback" in output:
         return ParseResult()
+    if not _FTP_LOGIN_CALL.search(command):
+        return ParseResult()
     # Note: ftplib does not print the 230 response to stdout, so we cannot check for it.
-    # Connection failures raise exceptions (ConnectionRefusedError, error_perm) which
-    # produce a Traceback — that check above covers the common failure modes.
+    # Login failures raise ftplib.error_perm (unhandled -> Traceback, caught above);
+    # the _FTP_LOGIN_CALL check above rules out a bare connect-only command that never
+    # attempted authentication at all, which would otherwise "succeed" trivially.
     return ParseResult(
         state_updates=[(ip, {"shell_access": True})],
         exploit=ExploitEvent(host=ip, vulnerability="ftp_anonymous_login"),

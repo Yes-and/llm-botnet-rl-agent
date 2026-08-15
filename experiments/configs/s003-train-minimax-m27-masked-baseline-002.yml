@@ -1,0 +1,75 @@
+# REINFORCE training run — scenario-003, masked-baseline experiment, relaunch.
+# Counterpart to s003-train-minimax-m27-full-action-space-001: same seeds,
+# architecture, and hyperparameters, but full_action_space: false — is_valid()'s
+# structural preconditions on exploit-path actions are back in effect, forcing
+# scan-before-probe / brute-force-before-connect ordering instead of leaving it
+# to the LLM's own judgment. See docs/adr/014-hierarchical-single-host-
+# engagement.md's Phase 1 notes and docs/features/rl-policy.md's "Action
+# Masking" section.
+#
+# Relaunch of s003-train-minimax-m27-masked-baseline-001 (crashed episode
+# 19/25 on an unhandled DeepInfra 429 during the scripted initial scan — fixed
+# 2026-07-17). Not resumed from -001's checkpoint on purpose: episodes 11-18
+# of that run predate three infra fixes landed the same day:
+#   1. CONNECT_FTP's is_valid() mask wrongly required creds_found, which can
+#      never be set for the anonymous-only FTP host (host06) — made the
+#      action structurally unreachable under masking. Now requires only
+#      service_ftp.
+#   2. The scripted-scan crash above (rl/environment.py's
+#      _scripted_initial_scan() now shares _try_once()'s broad exception
+#      handling instead of dying on the first unhandled API error).
+#   3. agent/executor.py's blocklist narrowed to allow 2>/dev/null (stderr
+#      suppression) while still blocking real stdout-hiding redirects — was
+#      rejecting the model's own correct self-discovery (`find ...
+#      2>/dev/null`). OPEN RISK, unconfirmed: may also let a hallucinated-
+#      wordlist hydra call silently swallow its own diagnostic instead of
+#      being rejected-and-retried into visibility. Watch this run's hydra
+#      transcript lines; may need reversing. See docs/features/
+#      command-executor.md.
+# Resuming would mix pre/post-fix episodes under one run_id — relaunching
+# fresh instead. scripts/sandbox_verify.sh confirmed all 24 host/exploit
+# checks passing immediately before this run.
+#
+# Does NOT spoon-feed the wordlist path — SYSTEM_PROMPT is unchanged, per the
+# project's deliberate choice not to (see docs/features/
+# llm-command-generation.md). NOTE: -001's header incorrectly claimed to run
+# on top of a wordlist-path SYSTEM_PROMPT fix that was actually reverted
+# before -001 ran — stale claim, corrected here.
+#
+# max_engagement_steps=20 kept identical to -001: it's a ceiling not a target,
+# and a forced scan-then-brute-force-then-connect chain needs real headroom to
+# reach its payoff step (see docs/features/scenario-001-ssh-bruteforce.md's
+# 6-7-command-deep case study).
+#
+# Commit this file before running. Results are gitignored.
+
+# --- Environment ---
+container_name: s003_attacker
+max_steps: 100
+max_engagement_steps: 20
+model: MiniMaxAI/MiniMax-M2.7
+timeout: 60
+api_timeout: 60
+max_output_chars: 4000
+dry_run: false
+full_action_space: false
+
+# --- Seeds ---
+seed_python: 42
+seed_torch: 42
+
+# --- Policy ---
+hidden_dim: 128
+num_layers: 2
+
+# --- Training ---
+num_episodes: 25
+gamma: 0.95
+learning_rate: 0.003
+use_baseline: false
+grad_clip: 1.0
+entropy_coeff: 0.01
+
+# --- Checkpoints ---
+save_every: 10
+results_dir: experiments/results

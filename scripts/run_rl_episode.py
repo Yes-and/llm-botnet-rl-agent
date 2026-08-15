@@ -44,6 +44,8 @@ config = EnvironmentConfig(
     timeout=raw.get("timeout", 60),
     max_output_chars=raw.get("max_output_chars", 4000),
     model=raw.get("model", "moonshotai/Kimi-K2.6"),
+    base_url=raw.get("base_url", "https://api.deepinfra.com/v1/openai"),
+    api_key_env=raw.get("api_key_env", "DEEPINFRA_API_KEY"),
 )
 
 print(f"Config:    {args.config}")

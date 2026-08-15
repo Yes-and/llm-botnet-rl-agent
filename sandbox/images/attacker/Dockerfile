@@ -17,5 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /home/agent
-COPY passwords.txt /usr/share/wordlists/passwords.txt
+# Real Mirai botnet default-credential pairs (user:pass), for use with hydra's -C flag.
+COPY credentials.txt /usr/share/wordlists/credentials.txt
 CMD ["bash"]

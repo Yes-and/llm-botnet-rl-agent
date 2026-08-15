@@ -1,14 +1,12 @@
 # RL Policy
 
-**Status:** Implemented (ADR 014 Phase 1 — worker only; host selection is not learned)
+**Status:** Implemented
 
 ## Overview
 
-`rl/policy.py` implements the policy network used during REINFORCE training. It maps the current episode state tensor plus the currently active host to a distribution over the 12 interaction actions (see `rl/actions.py`), from which the training loop samples the instruction injected into the LLM prompt.
+`rl/policy.py` implements the policy network used during REINFORCE training. It maps the current episode state tensor to a distribution over `(host, action, duration)` triples, from which the training loop samples to produce the instruction injected into the LLM prompt and the number of consecutive tries to give it.
 
-Host selection — which host to engage next — is **not** learned in Phase 1; it's a uniform random pick made by the training loop (`scripts/train.py`). The host head from the pre-ADR-014 design is retired for now; it returns in ADR 014 Phase 2 once a focused single-action worker is shown to complete exploit chains.
-
-See `docs/adr/014-hierarchical-single-host-engagement.md` for the design rationale. ADR 007's original host-first factored-head design, ADR 010's conditioned action head, and ADR 011's duration head are all superseded by ADR 014 — see that ADR's "Superseded sections."
+See ADR 007 for the original design rationale, ADR 010 for the conditioned action head extension, and ADR 011 for the duration head.
 
 ## Architecture
 
@@ -16,52 +14,101 @@ See `docs/adr/014-hierarchical-single-host-engagement.md` for the design rationa
 state [MAX_HOSTS, NUM_FEATURES]
     → flatten → [MAX_HOSTS * NUM_FEATURES]
     → shared MLP trunk → hidden [hidden_dim]
+    → host head: softmax over [MAX_HOSTS + 2] slots
     → action head: softmax over [NUM_ACTIONS]
-          input = concat(hidden, state[host_idx])   # active host's feature row
+          parallel mode:   input = hidden
+          conditioned mode: input = concat(hidden, state[host_slot])
+    → duration head: softmax over duration_options (default (1, 2, 3, 5))
+          input = concat(action_input, one_hot(action))
 ```
 
-The action head is conditioned on the active host's feature vector unconditionally now — there is no more parallel/conditioned toggle (ADR 010's `conditioned_action_head` flag is gone). Every decision is host-scoped by construction in Phase 1, so conditioning is no longer optional.
+The `conditioned_action_head` config flag (default `false`) switches between the two action-head modes.
 
-## Action Masking
+## Host Head
 
-The mask is a direct reflection of `rl.actions.is_valid()` — no precondition logic is duplicated in `policy.py`. `_build_action_mask(host_row, engagement_step, full_action_space)` builds a `[NUM_ACTIONS]` boolean mask (`True` = invalid) by calling `is_valid()` for every action against the active host's current feature dict, and the resulting logits are soft-masked (pushed to a large negative value, not hard `-inf`) before softmax.
+Outputs a distribution over `MAX_HOSTS + 2` slots:
 
-This mask is recomputed from the active host's live features on **every** call, which gives it the "dial-in" property central to Phase 1's design: right after the scripted discovery scan, only `is_alive` is known, so `is_valid()` only passes `SCAN_PORTS` and `PROBE_PORT` — the policy is structurally forced into recon before anything else. As the engagement discovers open ports, services, and credentials, the corresponding brute-force/connect/probe actions unmask themselves; actions whose precondition is no longer relevant (e.g. `BRUTE_FORCE_SSH` once `creds_found` is `True`) mask back out. `CONNECT_FTP` is the one exception to the "connect needs discovered creds" pattern — it unmasks on `service_ftp` alone, since FTP's soft target in this scenario is anonymous login, which has no credential for `creds_found` to ever be set from (see ADR 014's Phase 1 notes, 2026-07-17 entry).
+| Index | Meaning |
+|---|---|
+| 0 | `no_host` — for `DO_NOTHING` |
+| 1 | `all_hosts` — for `SCAN_NETWORK` |
+| 2 … MAX_HOSTS+1 | Discovered hosts, ordered by their randomly assigned tensor slot |
 
-**`ABANDON` is gated on `engagement_step` (`rl/actions.py`'s `MIN_STEPS_BEFORE_ABANDON = 3`), not unconditionally valid.** Added 2026-07-16 after a smoke test showed an untrained policy sampling `ABANDON` on ~30% of decisions — expected given it was 1 of only 3 valid actions at engagement start, but the user wanted it structurally impossible for the policy to learn a "give up immediately, every time" optimum regardless. `engagement_step` isn't a state-tensor feature — it's passed explicitly (`Environment.engagement_step_count`, threaded through `Policy.sample()`/`predict()`) since it's masking-time context, not something the network needs as an input. The "always at least one valid action" guarantee this used to provide now comes from `SCAN_PORTS`/`PROBE_PORT` instead (valid the moment `is_alive` is set, which is true for every host in the pool) — not from `ABANDON`.
+Host slots beyond `len(known_hosts())` are hard-masked to `-inf` before softmax. Slots are assigned randomly each episode reset so the policy must learn from feature content, not position.
 
-**`full_action_space` (experimental, 2026-07-16)** — a `Policy` constructor flag (`raw.get("full_action_space", False)` in both training scripts) that short-circuits every precondition above except `ABANDON`'s: with it on, every other action is valid from step one, and it's left to the LLM's own judgment (plus the standard `-0.1` step cost) to recognize when it lacks enough context and no-op instead. Testing whether the structural masking above actually helps learning, or whether it's better to let the policy learn preconditions from reward alone. Every existing precondition is left intact in `is_valid()`'s source — the flag only adds an early return before them — so switching back to structural masking is a one-line config change, not a code change.
+A host slot is also hard-masked to `-inf` if that host's `shell_access` feature is `1` — `EXPLOIT_REWARD` fires once per `(host, vulnerability)` (see `RewardCalculator`), so once a host is fully compromised, no action against it can ever score again; there is nothing left to learn there. This mask lives in the host head, not the action head: masking every action in an action-head row would leave softmax nothing to contrast against and collapse to a *uniform* distribution over that row instead of near-zero (masking is inherently relative — see ADR 012). Masking the host slot itself works because slots 0/1 (`no_host`/`all_hosts`) are never masked, always leaving a valid fallback.
 
-Host-level dedup (previously a `shell_access` mask on the host head, ADR 012) is gone from the policy entirely: a solved host is removed from the pool by the environment (`EpisodeState.remove`), so it's structurally impossible for the training loop to hand a compromised host's index to the policy again within the same episode.
+This mask was originally narrower and lived in the action head: only `CONNECT_SSH`/`CONNECT_FTP`/`CONNECT_TELNET` were masked (added after re-exploitation attempts on already-compromised hosts, s003 MiniMax M2.5 conditioned run, episode 49). Widened and moved 2026-07-10 after the same failure mode reappeared for `PROBE_REDIS`/`PROBE_MONGO` on MiniMax M2.7 (`s003-train-minimax-m27-conditioned-002`, episode 80: one `PROBE_REDIS` success on a host, then 19 more `PROBE_REDIS` picks against it in the same episode, each burning the full duration-head try budget for `-0.5`). The conditioned action head (ADR 010) is meant to learn this from `tried_probe_redis`/`shell_access` features alone, but at 80 episodes it evidently hadn't — the same convergence-onto-`PROBE_REDIS` failure ADR 010 was written to fix. See ADR 012.
+
+## Action Head
+
+Outputs a distribution over all 13 action types (see `rl/actions.py`). Structurally invalid `(host, action)` combinations (e.g. `SCAN_NETWORK` with a specific host slot) are soft-masked: logits are pushed to a large negative value, keeping near-zero probability without hard exclusion.
+
+One dynamic hard mask is applied at inference time: if a host's `creds_found` feature is `1`, all `BRUTE_FORCE_*` actions (`BRUTE_FORCE_SSH`, `BRUTE_FORCE_FTP`, `BRUTE_FORCE_TELNET`) are masked to `-inf` for that host slot. This prevents wasteful re-brute-forcing once credentials are already known but before shell access is confirmed (an interim state the host head's `shell_access` mask above doesn't cover, since that mask only fires once `shell_access` itself is `1`). Note: `creds_found` is one shared flag per host, not per-service, so this is only correct because no current scenario target exposes more than one crackable service per host. A future multi-service target would need per-service credential features before this mask stays correct.
+
+All other precondition checks (port open, etc.) are left to the learned reward signal rather than hard-masking, to avoid over-constraining the agent's exploration. `CONNECT_FTP` is the one exception to the general "connect needs discovered creds" pattern in `is_valid()` — it unmasks on `service_ftp` alone, since FTP's soft target in this scenario is anonymous login, which has no credential for `creds_found` to ever be set from.
+
+### Parallel mode (`conditioned_action_head: false`)
+
+Action logits are computed solely from the trunk output. The action head cannot condition on the selected host's current features, limiting its ability to suppress actions on specific hosts that have already failed.
+
+### Conditioned mode (`conditioned_action_head: true`)
+
+After sampling the host slot, the selected host's feature vector is concatenated to the trunk output before computing action logits:
+
+```
+log π(host, action | state) = log π_host(host | state) + log π_action(action | host, state)
+```
+
+This enables per-host action preferences — e.g. suppressing `PROBE_REDIS` on a host where `tried_probe_redis=1` and `shell_access=0`. Broadcast slots (`no_host`, `all_hosts`) receive a zero vector in place of host features.
+
+## Duration Head
+
+Outputs a distribution over a small fixed menu of try-counts, `duration_options` (default `(1, 2, 3, 5)`, config-driven like `conditioned_action_head`). Its input is `action_input` — the same vector the action head used, so it inherits host-conditioning when enabled — concatenated with a one-hot of the sampled action. This lets the policy learn *different* try-budgets per action (e.g. `duration≈1` for `PROBE_REDIS`, which succeeds in one command, versus a larger value for `BRUTE_FORCE_SSH`, which needs room for a recon → brute-force → connect chain) rather than one global value.
+
+Conditioning on the action (not just the trunk) is deliberate: an unconditioned duration head would reproduce the exact failure mode ADR 010 fixed for the action head — learning "duration=5 is globally good" and misapplying it to trivial one-shot actions. See ADR 011.
+
+The sampled `duration` is passed to `Environment.step_block()`, which executes up to that many consecutive primitive commands against the same `(host, action)`, stopping early once that action's goal is met (see `docs/features/rl-parser.md` for per-action success signals).
 
 ## Sampling
 
+At training time, all three heads sample from their distributions to maintain exploration:
+
 ```python
-dist = Categorical(logits=self._action_logits(state, host_idx, engagement_step))
-action_idx = dist.sample()
-log_prob = dist.log_prob(action_idx)
-entropy = dist.entropy()
+host_dist = Categorical(host_logits_masked)
+host_slot = host_dist.sample()
+
+action_input = concat(hidden, state[host_slot]) if conditioned else hidden
+action_dist = Categorical(action_logits_masked(action_input, host_slot))
+action = action_dist.sample()
+
+duration_input = concat(action_input, one_hot(action))
+duration_dist = Categorical(duration_head(duration_input))
+duration = duration_options[duration_dist.sample()]
+
+log_prob = host_dist.log_prob(host_slot) + action_dist.log_prob(action) + duration_dist.log_prob(duration_idx)
+entropy  = host_dist.entropy() + action_dist.entropy() + duration_dist.entropy()
 ```
 
-At evaluation time, argmax is used via `policy.predict()`.
+At evaluation time, argmax is used for all three heads via `policy.predict()`.
 
 ## Interface
 
 ```python
-policy = Policy(hidden_dim=128, num_layers=2, full_action_space=False)
+policy = Policy(hidden_dim=128, num_layers=1, conditioned_action_head=False, duration_options=(1, 2, 3, 5))
 
-action, log_prob, entropy = policy.sample(state_tensor, host_idx, engagement_step)
-action                    = policy.predict(state_tensor, host_idx, engagement_step)
+action, host_slot, duration, log_prob, entropy = policy.sample(state_tensor, known_host_count)
+action, host_slot, duration                    = policy.predict(state_tensor, known_host_count)
 ```
-
-`host_idx` is the row index into the `[MAX_HOSTS, NUM_FEATURES]` state tensor for the host the caller started an engagement on — obtained via `env._state.known_hosts().index(host_ip)` in `scripts/train.py`. `engagement_step` (default 0) is `env.engagement_step_count` — only consulted by the `ABANDON` mask.
 
 ## Files
 
 - `rl/policy.py` — implementation
-- `tests/test_policy.py` — unit tests (shapes, is_valid()-based masking/dial-in behavior, host conditioning, log-prob, determinism)
-- `docs/adr/014-hierarchical-single-host-engagement.md` — current design; retires the host and duration heads for Phase 1
-- `docs/adr/007-rl-algorithm-and-policy-design.md`, `010-conditioned-action-head.md`, `011-action-duration-head.md`, `012-shell-access-mask-and-exploit-host-attribution.md` — superseded prior designs, kept for history (ADRs are append-only)
-- `rl/actions.py` — action enum and `is_valid()`, the single source of truth for the mask
+- `tests/test_policy.py` — unit tests (shapes, masking, log-prob, determinism, conditioned mode, duration head)
+- `docs/adr/007-rl-algorithm-and-policy-design.md` — original design decisions
+- `docs/adr/010-conditioned-action-head.md` — conditioned action head rationale
+- `docs/adr/011-action-duration-head.md` — duration head rationale and multi-try block semantics
+- `docs/adr/012-shell-access-mask-and-exploit-host-attribution.md` — widened shell_access mask; exploit-host attribution gate
+- `rl/actions.py` — action enum
 - `rl/state.py` — state tensor structure
-- `rl/environment.py` — `interact()`/`start_engagement()`, which drive the sampled action
+- `rl/environment.py` — `step_block()`, which executes the sampled duration

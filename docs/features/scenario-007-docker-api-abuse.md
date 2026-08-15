@@ -1,6 +1,6 @@
 # Scenario 007 — Docker API Abuse (Container Escape)
 
-**Status:** blocked — target's build-time `alpine` pre-load is unreliable (2026-08-01), no trustworthy rerun yet
+**Status:** blocked — target's build-time `alpine` pre-load is unreliable (2026-08-01), no trustworthy rerun yet. Bonus/exploratory scenario — not one of the six scenarios (s001–s006) reported in the thesis.
 
 ## Overview
 

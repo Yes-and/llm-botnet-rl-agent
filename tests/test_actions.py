@@ -1,20 +1,11 @@
 import pytest
-from rl.actions import Action, is_valid, MIN_STEPS_BEFORE_ABANDON
+from rl.actions import Action, BROADCAST_ACTIONS, is_valid
 
 
-def test_abandon_requires_min_engagement_steps():
-    assert not is_valid(Action.ABANDON, {}, engagement_step=0)
-    assert not is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON - 1)
-    assert is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON)
-
-
-def test_full_action_space_bypasses_preconditions_except_abandon():
-    assert is_valid(Action.BRUTE_FORCE_SSH, {}, full_action_space=True)
-    assert is_valid(Action.CONNECT_SSH, {}, full_action_space=True)
-    assert is_valid(Action.PROBE_MONGO, {}, full_action_space=True)
-    # ABANDON's gate still applies even in full_action_space mode
-    assert not is_valid(Action.ABANDON, {}, engagement_step=0, full_action_space=True)
-    assert is_valid(Action.ABANDON, {}, engagement_step=MIN_STEPS_BEFORE_ABANDON, full_action_space=True)
+def test_broadcast_actions_always_valid():
+    empty = {}
+    for action in BROADCAST_ACTIONS:
+        assert is_valid(action, empty)
 
 
 def test_scan_ports_requires_alive():
@@ -75,23 +66,13 @@ def test_probe_mongo_requires_port():
 
 
 def test_all_actions_covered():
-    """Every action must have a matching is_valid() case. BRUTE_FORCE_* and
-    CONNECT_* are mutually exclusive on creds_found (see
-    test_creds_found_masks_brute_force_actions / test_connect_requires_creds_and_service),
-    so they can't share one "everything true" dict — CONNECT_* gets its own."""
     host = {
         "is_alive": True,
         "port_21_open": True, "port_22_open": True, "port_23_open": True,
         "port_80_open": True, "port_443_open": True,
         "port_6379_open": True, "port_27017_open": True,
         "service_ssh": True, "service_ftp": True, "service_telnet": True,
+        "creds_found": True,
     }
-    connect_actions = {Action.CONNECT_SSH, Action.CONNECT_FTP, Action.CONNECT_TELNET}
     for action in Action:
-        if action in connect_actions:
-            continue
-        assert is_valid(action, host, engagement_step=MIN_STEPS_BEFORE_ABANDON)
-
-    host_with_creds = {**host, "creds_found": True}
-    for action in connect_actions:
-        assert is_valid(action, host_with_creds)
+        assert is_valid(action, host)

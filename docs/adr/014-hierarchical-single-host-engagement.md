@@ -1,6 +1,6 @@
 # ADR 014: Hierarchical Single-Host Engagement — Target Selection + Options-Style Worker
 
-**Status:** Proposed
+**Status:** Accepted — implemented and evaluated (Phase 1 only; Phase 2's learned host head was never built), but not adopted for the submitted thesis. The repository has been reverted to the pre-ADR-014 design ADR-014 would have superseded. See ADR 019.
 
 **Would supersede (on acceptance):** the per-step host re-selection semantics in ADR 007 (Decision 1) and ADR 010; the multi-try block mechanism in ADR 011; the shell-access mask in ADR 012; and would relocate ADR 009's triage question. See "Superseded sections" below. Nothing changes until this ADR is Accepted.
 
